@@ -1,0 +1,299 @@
+openapi: 3.0.3
+info:
+  title: Trazzos Cluster Pro V2 - BFF API (UI-Ready)
+  version: "1.0.0"
+  description: >
+    API para frontend de prueba. El frontend SOLO consume este BFF.
+    El BFF lee Supabase (service_role) y ejecuta workflows vía proxy a n8n.
+
+servers:
+  - url: /api
+
+tags:
+  - name: Data
+  - name: Workflows
+
+paths:
+  /data/clusters:
+    get:
+      tags: [Data]
+      summary: Listar clusters
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Cluster" }
+
+  /data/synergies:
+    get:
+      tags: [Data]
+      summary: Listar sinergias por cluster_id
+      parameters:
+        - in: query
+          name: cluster_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Synergy" }
+
+  /data/rfps:
+    get:
+      tags: [Data]
+      summary: Listar RFPs (opcional filtrar por synergy_id)
+      parameters:
+        - in: query
+          name: synergy_id
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Rfp" }
+
+  /data/offers:
+    get:
+      tags: [Data]
+      summary: Listar ofertas por rfp_id
+      parameters:
+        - in: query
+          name: rfp_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Offer" }
+
+  /data/purchase-orders:
+    get:
+      tags: [Data]
+      summary: Listar purchase orders por rfp_id
+      parameters:
+        - in: query
+          name: rfp_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PurchaseOrder" }
+
+  /data/evidence:
+    get:
+      tags: [Data]
+      summary: Listar evidencia por entity_id (ej: rfp_id o po_id dependiendo de entity_type)
+      parameters:
+        - in: query
+          name: entity_type
+          required: true
+          schema: { type: string }
+        - in: query
+          name: entity_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Evidence" }
+
+  /data/audit:
+    get:
+      tags: [Data]
+      summary: Timeline de auditoría por entity_id
+      parameters:
+        - in: query
+          name: entity_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AuditEvent" }
+
+  /data/ingestion-jobs:
+    get:
+      tags: [Data]
+      summary: Consultar ingestion_jobs por upload_id
+      parameters:
+        - in: query
+          name: upload_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/IngestionJob" }
+
+  /workflows/upload-session:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF1 (n8n) - crear sesión de upload
+      responses:
+        "200": { description: OK }
+
+  /workflows/upload-confirm:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF2 (n8n) - confirmar upload
+      responses:
+        "200": { description: OK }
+
+  /workflows/rfp-open:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF7 (n8n) - abrir RFP e invitar proveedores
+      responses:
+        "200": { description: OK }
+
+  /workflows/offer-submit:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF8 (n8n) - enviar oferta
+      responses:
+        "200": { description: OK }
+
+  /workflows/scoring-weights:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF9 (n8n) - weights/scoring
+      responses:
+        "200": { description: OK }
+
+  /workflows/committee-decide:
+    post:
+      tags: [Workflows]
+      summary: Proxy WF9 (n8n) - decisión comité (dispara WF10 internamente)
+      responses:
+        "200": { description: OK }
+
+components:
+  schemas:
+    Cluster:
+      type: object
+      properties:
+        cluster_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, nullable: true }
+
+    Synergy:
+      type: object
+      properties:
+        synergy_id: { type: string }
+        cluster_id: { type: string, format: uuid, nullable: true }
+        item_category: { type: string }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        companies_involved_json: { type: object }
+        volume_total_json: { type: object, nullable: true }
+        status: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    Rfp:
+      type: object
+      properties:
+        rfp_id: { type: string, format: uuid }
+        synergy_id: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        published_at: { type: string, format: date-time, nullable: true }
+        closing_at: { type: string, format: date-time }
+        rfp_pack_path: { type: string, nullable: true }
+        created_by_user_id: { type: string, format: uuid, nullable: true }
+
+    Offer:
+      type: object
+      properties:
+        offer_id: { type: string, format: uuid }
+        rfp_id: { type: string, format: uuid, nullable: true }
+        supplier_id: { type: string, format: uuid, nullable: true }
+        price_total: { type: number }
+        currency: { type: string, nullable: true }
+        lead_time_days: { type: integer, nullable: true }
+        terms_json: { type: object, nullable: true }
+        attachments_path: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        submitted_at: { type: string, format: date-time, nullable: true }
+
+    PurchaseOrder:
+      type: object
+      properties:
+        po_id: { type: string, format: uuid }
+        rfp_id: { type: string, format: uuid, nullable: true }
+        offer_id: { type: string, format: uuid, nullable: true }
+        status: { type: string, nullable: true }
+        po_document_path: { type: string, nullable: true }
+        evidence_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    Evidence:
+      type: object
+      properties:
+        evidence_id: { type: string, format: uuid }
+        entity_type: { type: string }
+        entity_id: { type: string, format: uuid }
+        payload_hash_sha256: { type: string }
+        tx_hash: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    AuditEvent:
+      type: object
+      properties:
+        event_id: { type: string, format: uuid }
+        correlation_id: { type: string, format: uuid, nullable: true }
+        event_type: { type: string, nullable: true }
+        actor_user_id: { type: string, format: uuid, nullable: true }
+        actor_role: { type: string, nullable: true }
+        company_id: { type: string, format: uuid, nullable: true }
+        entity_type: { type: string, nullable: true }
+        entity_id: { type: string, format: uuid, nullable: true }
+        summary: { type: string, nullable: true }
+        payload_hash_sha256: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    IngestionJob:
+      type: object
+      properties:
+        job_id: { type: string, format: uuid }
+        upload_id: { type: string, format: uuid, nullable: true }
+        pipeline_version: { type: string, nullable: true }
+        mapping_profile_id: { type: string, format: uuid, nullable: true }
+        status: { type: string, nullable: true }
+        rows_total: { type: integer, nullable: true }
+        rows_ok: { type: integer, nullable: true }
+        rows_error: { type: integer, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        ended_at: { type: string, format: date-time, nullable: true }
+        correlation_id: { type: string, format: uuid, nullable: true }
