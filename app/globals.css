@@ -24,3 +24,150 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Animaciones para componentes geoespaciales */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+/* Estilos para marcadores de Mapbox */
+.company-marker {
+  transition: all 0.3s ease;
+}
+
+/* App Background - Pure Dark */
+.bg-app-background {
+  background-color: #000000;
+  position: relative;
+}
+
+/* Header Background - Dark */
+.bg-header-background {
+  background-color: #0a0a0a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Typography */
+h1 {
+  font-size: 48px;
+  line-height: 1.1;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 1rem;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 32px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+}
+
+/* Cards */
+.card {
+  background-color: #0f0f0f;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  border-color: rgba(154, 255, 141, 0.2);
+  box-shadow: 0 8px 24px rgba(154, 255, 141, 0.1);
+  background-color: #141414;
+}
+
+/* Text Colors */
+.text-secondary {
+  color: #a0a0a0;
+}
+
+.text-muted {
+  color: #6a6a6a;
+}
+
+/* Legacy textured background (for backward compatibility) */
+.bg-textured {
+  background-color: #232323;
+  background-image: 
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.03) 1px, transparent 0),
+    linear-gradient(180deg, transparent 0%, rgba(154, 255, 141, 0.02) 50%, transparent 100%),
+    linear-gradient(90deg, transparent 0%, rgba(154, 255, 141, 0.01) 50%, transparent 100%);
+  background-size: 20px 20px, 100% 100%, 100% 100%;
+  position: relative;
+}
+
+.bg-header-textured {
+  background-color: #1a1a1a;
+  background-image: 
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.02) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Animaciones para modal de inteligencia */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Animaciones para botón Academy */
+@keyframes pulse-subtle {
+  0%, 100% {
+    box-shadow: 0 4px 20px rgba(154, 255, 141, 0.3), 0 0 40px rgba(154, 255, 141, 0.1);
+  }
+  50% {
+    box-shadow: 0 4px 25px rgba(154, 255, 141, 0.4), 0 0 50px rgba(154, 255, 141, 0.15);
+  }
+}
+
+@keyframes sheen {
+  0% {
+    transform: translateX(-100%) translateY(-100%) rotate(45deg);
+  }
+  100% {
+    transform: translateX(100%) translateY(100%) rotate(45deg);
+  }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out;
+}
+
+.animate-sheen {
+  animation: sheen 0.6s ease-out;
+}
