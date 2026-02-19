@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { parseWalletError } from '@/components/auth/parseWalletError';
 import Toast from '@/components/auth/Toast';
 
-export default function AccesoPage() {
+function AccesoPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   
@@ -482,5 +482,17 @@ export default function AccesoPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function AccesoPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-white">Cargando...</div>
+      </div>
+    }>
+      <AccesoPageContent />
+    </Suspense>
   );
 }

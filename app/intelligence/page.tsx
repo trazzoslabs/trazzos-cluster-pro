@@ -497,7 +497,7 @@ export default function IntelligencePage() {
 
     const centerX = canvas.width / (2 * window.devicePixelRatio);
     const centerY = canvas.height / (2 * window.devicePixelRatio);
-    const nodes: Array<{ 
+    type NodeType = { 
       x: number; 
       y: number; 
       z: number; 
@@ -507,7 +507,9 @@ export default function IntelligencePage() {
       angle: number;
       radius: number;
       baseZ: number;
-    }> = [];
+    };
+    
+    const nodes: Array<NodeType> = [];
 
     // Crear nodos desde sinergias con estructura 3D
     const synergyCount = Math.min(synergies.length, 12);
@@ -647,7 +649,7 @@ export default function IntelligencePage() {
       const y = (e instanceof MouseEvent ? e.clientY : e.touches[0].clientY) - rect.top;
       
       // Buscar el nodo más cercano al click
-      let closestNode: typeof nodes[0] | null = null;
+      let closestNode: NodeType | null = null;
       let minDist = Infinity;
       
       nodes.forEach((node) => {
@@ -658,23 +660,26 @@ export default function IntelligencePage() {
         
         if (dist < nodeSize && dist < minDist) {
           minDist = dist;
-          closestNode = node;
+          closestNode = node as NodeType;
         }
       });
       
-      if (closestNode && closestNode.label !== 'Cluster Industrial') {
-        // Animación de escala al hacer click
-        const originalSize = closestNode.size;
-        closestNode.size = originalSize * 1.15;
-        
-        setTimeout(() => {
-          if (closestNode) {
-            closestNode.size = originalSize;
-          }
-        }, 120);
-        
-        // Establecer la empresa seleccionada
-        setSelectedCompanyId(closestNode.label);
+      if (closestNode) {
+        const node = closestNode as NodeType;
+        if (node.label !== 'Cluster Industrial') {
+          // Animación de escala al hacer click
+          const originalSize = node.size;
+          node.size = originalSize * 1.15;
+          
+          setTimeout(() => {
+            if (closestNode) {
+              (closestNode as NodeType).size = originalSize;
+            }
+          }, 120);
+          
+          // Establecer la empresa seleccionada
+          setSelectedCompanyId(node.label);
+        }
       }
     };
 

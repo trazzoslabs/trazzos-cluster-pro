@@ -33,7 +33,7 @@ export async function getAuthContext(): Promise<AuthContext> {
     }
     
     // Determine auth method
-    let auth_method: 'wallet' | 'google' | 'email' = 'unknown';
+    let auth_method: 'wallet' | 'google' | 'email' | 'unknown' = 'unknown';
     let display_name = 'Usuario';
     let address: string | undefined;
     let email: string | undefined;

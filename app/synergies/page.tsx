@@ -147,7 +147,7 @@ function SynergiesContent() {
       )}
 
       {!loading && !error && synergies.length > 0 && (
-        <SectionCard>
+        <SectionCard title="Sinergias">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-zinc-900">
