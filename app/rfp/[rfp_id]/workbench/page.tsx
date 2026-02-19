@@ -148,6 +148,15 @@ export default function WorkbenchPage() {
     loadData();
   }, [rfpId]);
 
+  // Utility function to copy to clipboard
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+    }
+  };
+
   // Load audit events when correlation_id changes
   useEffect(() => {
     if (!lastCorrelationId) {
@@ -333,7 +342,6 @@ export default function WorkbenchPage() {
 
   return (
     <div className="min-h-screen bg-textured">
-      <Header backUrl={`/rfp/${rfpId}`} backLabel="Volver a RFP" />
       <main className="container mx-auto px-4 py-8 max-w-6xl relative z-10">
         <h1 className="text-2xl font-semibold text-white mb-6">
           Workbench - RFP {rfpId.substring(0, 8)}...
@@ -364,7 +372,7 @@ export default function WorkbenchPage() {
             ) : (
               <div className="space-y-4">
                 <p className="text-zinc-400 text-sm">
-                  Total runs: {scoringRuns.length} | Último: {formatDate(latestScoringRun?.created_at)}
+                  Total runs: {scoringRuns.length} | Último: {formatDate(latestScoringRun?.created_at ?? null)}
                 </p>
                 {latestScoringRun?.results_json && (
                   <details className="bg-zinc-900 rounded-lg p-4">
@@ -683,6 +691,7 @@ export default function WorkbenchPage() {
               </>
             )}
         </SectionCard>
+      </main>
     </div>
   );
 }

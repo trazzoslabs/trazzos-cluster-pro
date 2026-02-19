@@ -680,8 +680,7 @@ export default function RfpDetailPage() {
                 </div>
               </div>
             )}
-          </div>
-        </section>
+        </SectionCard>
 
         {/* Committee Decision Section */}
         <SectionCard title="Decisión del Comité">
