@@ -146,7 +146,7 @@ export default function IngestionJobsPage() {
       </SectionCard>
 
       {/* Jobs Table */}
-      <SectionCard>
+     <SectionCard title="Jobs de Ingesta">
         {loading ? (
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#9aff8d] mb-4"></div>
