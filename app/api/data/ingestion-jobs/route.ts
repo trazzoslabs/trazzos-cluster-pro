@@ -2,6 +2,51 @@ import { NextRequest } from 'next/server';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
 
+/**
+ * PATCH /api/data/ingestion-jobs
+ * Permite marcar un job como 'completed' manualmente (force-close).
+ * Body: { job_id: string }
+ */
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { job_id } = body;
+
+    if (!job_id) {
+      return createErrorResponse('job_id es requerido', 400);
+    }
+
+    const { data: current, error: fetchErr } = await supabaseServer
+      .from('ingestion_jobs')
+      .select('job_id, status')
+      .eq('job_id', job_id)
+      .maybeSingle();
+
+    if (fetchErr || !current) {
+      return createErrorResponse('Job no encontrado', 404);
+    }
+
+    if (current.status === 'completed') {
+      return createSuccessResponse({ message: 'Job ya estaba completado', job_id });
+    }
+
+    const { error: updateErr } = await supabaseServer
+      .from('ingestion_jobs')
+      .update({ status: 'completed', ended_at: new Date().toISOString() })
+      .eq('job_id', job_id);
+
+    if (updateErr) {
+      console.error('[PATCH ingestion-jobs] Error al actualizar:', updateErr);
+      return createErrorResponse('Error al actualizar el job', 500);
+    }
+
+    return createSuccessResponse({ message: 'Job marcado como completado', job_id });
+  } catch (error) {
+    console.error('[PATCH ingestion-jobs] Error inesperado:', error);
+    return createErrorResponse('Error interno', 500);
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;

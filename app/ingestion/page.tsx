@@ -121,13 +121,42 @@ export default function IngestionPage() {
   // Notificación de job completado
   const [completionToast, setCompletionToast] = useState<string | null>(null);
   const [refreshingMarts, setRefreshingMarts] = useState(false);
+  const [forcingComplete, setForcingComplete] = useState<string | null>(null);
   const prevJobStatusRef = useRef<Map<string, string | null>>(new Map());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load user profile on mount
+  // Persistir / restaurar correlation_id y jobId en localStorage
+  const persistTrackingIds = (ids: { jobId?: string | null; correlationId?: string | null }) => {
+    try {
+      if (ids.jobId) localStorage.setItem('trazzos_tracked_job_id', ids.jobId);
+      if (ids.correlationId) localStorage.setItem('trazzos_tracked_correlation_id', ids.correlationId);
+    } catch { /* quota exceeded o SSR */ }
+  };
+
+  const clearTrackingIds = () => {
+    try {
+      localStorage.removeItem('trazzos_tracked_job_id');
+      localStorage.removeItem('trazzos_tracked_correlation_id');
+    } catch { /* noop */ }
+  };
+
+  // Load user profile on mount + restore persisted tracking IDs
   useEffect(() => {
     fetchUserProfile();
     fetchRecentJobs();
+
+    try {
+      const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
+      const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
+      if (savedJobId) {
+        setJobId(savedJobId);
+        startJobPolling();
+      }
+      if (savedCorrelationId) {
+        console.log('[restore] correlation_id restaurado:', savedCorrelationId);
+      }
+    } catch { /* noop */ }
+
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
@@ -210,6 +239,7 @@ export default function IngestionPage() {
           if (wasRunning && curr === 'completed') {
             setCompletionToast(`Job ${job.job_id.substring(0, 8)}… completado`);
             handleRefreshMarts();
+            clearTrackingIds();
             setTimeout(() => setCompletionToast(null), 8000);
           }
         });
@@ -230,6 +260,32 @@ export default function IngestionPage() {
         // Silenciar errores de polling
       }
     }, 10_000);
+  }, [handleRefreshMarts]);
+
+  const handleForceComplete = useCallback(async (forceJobId: string) => {
+    try {
+      setForcingComplete(forceJobId);
+      const res = await fetch('/api/data/ingestion-jobs', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: forceJobId }),
+      });
+      if (res.ok) {
+        setCompletionToast(`Job ${forceJobId.substring(0, 8)}… marcado como completado`);
+        handleRefreshMarts();
+        clearTrackingIds();
+        setTimeout(() => setCompletionToast(null), 8000);
+        fetchRecentJobs();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setGlobalError(err.error || 'Error al forzar completado');
+      }
+    } catch (err) {
+      console.error('[forceComplete] Error:', err);
+      setGlobalError('Error de red al forzar completado');
+    } finally {
+      setForcingComplete(null);
+    }
   }, [handleRefreshMarts]);
 
   // Step 1: Create session
@@ -320,6 +376,9 @@ export default function IngestionPage() {
         setJobId(ids.jobId);
         console.log('[handleCreateSession] Job ID extraído:', ids.jobId);
       }
+
+      // Persistir en localStorage para sobrevivir recargas de página
+      persistTrackingIds({ jobId: ids.jobId, correlationId: ids.correlationId });
       
       const url = extractSignedUrl(data);
       if (url) {
@@ -327,7 +386,6 @@ export default function IngestionPage() {
         console.log('[handleCreateSession] Signed URL obtenida');
       }
 
-      // Retornar datos para uso inmediato
       return { data, signedUrl: url, uploadId: ids.uploadId };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to create session';
@@ -821,27 +879,45 @@ export default function IngestionPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-700">
-                {recentJobs.map((job) => (
-                  <tr key={job.job_id} className="hover:bg-zinc-700/50 transition-colors">
-                    <td className="px-4 py-3">
-                      <StatusBadge status={job.status} />
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400 font-mono">
-                      {job.job_id.substring(0, 8)}...
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400">
-                      {formatDate(job.started_at)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/ingestion/jobs/${job.job_id}`}
-                        className="inline-block px-3 py-1.5 bg-[#9aff8d] hover:bg-[#9aff8d]/80 text-[#232323] rounded-md transition-colors text-sm font-medium"
-                      >
-                        Ver detalle
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {recentJobs.map((job) => {
+                  const isActive = ['running', 'processing', 'pending', 'uploading'].includes(job.status?.toLowerCase() || '');
+                  const elapsedMs = job.started_at ? Date.now() - new Date(job.started_at).getTime() : 0;
+                  const canForceComplete = isActive && elapsedMs > 60_000;
+
+                  return (
+                    <tr key={job.job_id} className="hover:bg-zinc-700/50 transition-colors">
+                      <td className="px-4 py-3">
+                        <StatusBadge status={job.status} />
+                      </td>
+                      <td className="px-4 py-3 text-sm text-zinc-400 font-mono">
+                        {job.job_id.substring(0, 8)}...
+                      </td>
+                      <td className="px-4 py-3 text-sm text-zinc-400">
+                        {formatDate(job.started_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/ingestion/jobs/${job.job_id}`}
+                            className="inline-block px-3 py-1.5 bg-[#9aff8d] hover:bg-[#9aff8d]/80 text-[#232323] rounded-md transition-colors text-sm font-medium"
+                          >
+                            Ver detalle
+                          </Link>
+                          {canForceComplete && (
+                            <button
+                              onClick={() => handleForceComplete(job.job_id)}
+                              disabled={forcingComplete === job.job_id}
+                              className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-md transition-colors text-xs font-medium"
+                              title="Han pasado más de 60s — marcar como completado manualmente"
+                            >
+                              {forcingComplete === job.job_id ? '…' : 'Forzar cierre'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
