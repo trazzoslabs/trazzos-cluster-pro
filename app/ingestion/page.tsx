@@ -277,31 +277,34 @@ export default function IngestionPage() {
   };
 
   // Step 2: Upload file
-  const handleUploadFile = async () => {
+  // urlOverride permite pasar la URL directamente sin esperar el re-render de React
+  const handleUploadFile = async (urlOverride?: string) => {
     console.log('[handleUploadFile] Iniciando subida de archivo...');
     setGlobalError(null);
+
+    const targetUrl = urlOverride || signedUrl;
     
     if (!file) {
       const errorMsg = 'Archivo es requerido';
       console.error('[handleUploadFile] Error:', errorMsg);
       setErrorUpload(errorMsg);
       setGlobalError(errorMsg);
-      return;
+      return false;
     }
 
-    if (!signedUrl) {
+    if (!targetUrl) {
       const errorMsg = 'Falta signed_url. Por favor crea una sesión primero.';
       console.error('[handleUploadFile] Error:', errorMsg);
       setErrorUpload(errorMsg);
       setGlobalError(errorMsg);
-      return;
+      return false;
     }
 
     console.log('[handleUploadFile] Subiendo archivo:', {
       name: file.name,
       size: file.size,
       type: file.type,
-      signedUrl: signedUrl.substring(0, 50) + '...',
+      signedUrl: targetUrl.substring(0, 50) + '...',
     });
 
     try {
@@ -309,9 +312,7 @@ export default function IngestionPage() {
       setErrorUpload(null);
       setSuccessUpload(false);
 
-      // Subir archivo directamente a S3 usando la signedUrl
-      // El archivo se envía como body binario, no como FormData
-      const response = await fetch(signedUrl, {
+      const response = await fetch(targetUrl, {
         method: 'PUT',
         body: file,
         headers: {
@@ -495,23 +496,21 @@ export default function IngestionPage() {
       return;
     }
 
-    // Flujo basado en uploadId:
-    // - Si no hay uploadId, crear sesión y luego subir archivo
-    // - Si hay uploadId pero no está confirmado, confirmar
     const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
     
     if (!currentUploadId) {
       // Paso 1: Crear sesión
       const sessionResult = await handleCreateSession();
       
-      // Paso 2: Si la sesión fue exitosa y tenemos signedUrl, subir archivo
-      if (sessionResult?.signedUrl) {
-        const uploadSuccess = await handleUploadFile();
-        if (!uploadSuccess) {
-          return; // Si falla la subida, detener el flujo
-        }
-      } else {
-        return; // Si no hay signedUrl, detener el flujo
+      if (!sessionResult?.signedUrl) {
+        console.error('[handleUpload] No se obtuvo signedUrl de la sesión');
+        return;
+      }
+
+      // Paso 2: Subir archivo pasando la URL directamente (evita esperar re-render)
+      const uploadSuccess = await handleUploadFile(sessionResult.signedUrl);
+      if (!uploadSuccess) {
+        return;
       }
     } else if (currentUploadId && !isConfirmed && successUpload) {
       // Paso 3: Confirmar (solo si el archivo ya se subió)
