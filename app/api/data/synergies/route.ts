@@ -34,22 +34,9 @@ export async function GET(request: NextRequest) {
     let source = '';
     let usedFallback = false;
 
-    // ── Fuente 1: operational_data (tabla donde n8n escribe el JSON) ──
-    const { data: opData, error: opErr } = await supabaseServer
-      .from('operational_data')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (opErr) {
-      console.warn('[synergies] operational_data no disponible:', opErr.message);
-    } else if (opData && opData.length > 0) {
-      rows = opData.map(mapOperationalRow);
-      source = 'operational_data';
-      console.log('[synergies] Datos desde operational_data:', rows.length);
-    }
-
-    // ── Fuente 2: tabla synergies (esquema canónico) ──
-    if (rows.length === 0) {
+    // ── Fuente 1: tabla synergies (n8n V2-06-DB-Upsert-Synergies escribe aquí
+    //    con los nombres correctos: companies_involved_json, volume_total_json) ──
+    {
       let query = supabaseServer.from('synergies').select('*');
       if (clusterId) query = query.eq('cluster_id', clusterId);
 
@@ -76,6 +63,22 @@ export async function GET(request: NextRequest) {
         source = 'synergies';
         usedFallback = true;
         console.log('[synergies] Fallback sin filtro cluster_id:', rows.length);
+      }
+    }
+
+    // ── Fuente 2 (fallback): operational_data si existe y synergies está vacía ──
+    if (rows.length === 0) {
+      const { data: opData, error: opErr } = await supabaseServer
+        .from('operational_data')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (opErr) {
+        console.warn('[synergies] operational_data no disponible:', opErr.message);
+      } else if (opData && opData.length > 0) {
+        rows = opData.map(mapOperationalRow);
+        source = 'operational_data';
+        console.log('[synergies] Fallback operational_data:', rows.length);
       }
     }
 
