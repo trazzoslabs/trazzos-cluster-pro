@@ -35,7 +35,6 @@ export default function IngestionPage() {
 
   // User profile loading state
   const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
-  const [profileError, setProfileError] = useState<string | null>(null);
 
   // Step 1 - Session
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null);
@@ -56,6 +55,41 @@ export default function IngestionPage() {
   const [loadingConfirm, setLoadingConfirm] = useState(false);
   const [errorConfirm, setErrorConfirm] = useState<string | null>(null);
   const [successConfirm, setSuccessConfirm] = useState(false);
+
+  // Helpers (declarados antes de su primer uso)
+  const findNestedValue = (obj: any, keys: string[]): string | null => {
+    for (const key of keys) {
+      if (obj[key]) return obj[key];
+      for (const k in obj) {
+        if (typeof obj[k] === 'object' && obj[k] !== null) {
+          const found = findNestedValue(obj[k], [key]);
+          if (found) return found;
+        }
+      }
+    }
+    return null;
+  };
+
+  const extractIds = (response: SessionResponse) => {
+    const jobIdKeys = ['job_id', 'jobId', 'jobId'];
+    const uploadIdKeys = ['upload_id', 'uploadId', 'uploadId'];
+    const correlationIdKeys = ['correlation_id', 'correlationId', 'correlationId'];
+    const hashKeys = ['hash', 'payload_hash', 'payload_hash_sha256'];
+    return {
+      jobId: findNestedValue(response, jobIdKeys),
+      uploadId: findNestedValue(response, uploadIdKeys),
+      correlationId: findNestedValue(response, correlationIdKeys),
+      hash: findNestedValue(response, hashKeys),
+    };
+  };
+
+  const extractSignedUrl = (response: SessionResponse): string | null => {
+    const possibleKeys = ['signed_url', 'signedUrl', 'url', 'upload_url', 'signedUploadUrl'];
+    for (const key of possibleKeys) {
+      if (response[key]) return response[key];
+    }
+    return null;
+  };
 
   // Extraer uploadId de sessionResponse para determinar el estado del botón
   const uploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
@@ -93,27 +127,24 @@ export default function IngestionPage() {
   const fetchUserProfile = async () => {
     try {
       setLoadingProfile(true);
-      setProfileError(null);
 
       const response = await fetch('/api/auth/profile');
       
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(errorData.error || `Failed to fetch profile: ${response.statusText}`);
+        // No bloquear la página si el perfil falla; los IDs fijos son suficientes
+        console.warn('[fetchUserProfile] Perfil no disponible (status %d). Usando IDs fijos.', response.status);
+        return;
       }
 
       const result = await response.json();
       const profile = result.data;
 
       if (profile) {
-        // Mantener los IDs fijos, solo actualizar email
         setUserEmail(profile.email || '');
-        // Los IDs se mantienen en los valores fijos
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load user profile';
-      setProfileError(errorMessage);
-      console.error('Error fetching user profile:', err);
+      // Silencioso: los IDs fijos ya están configurados, el email es opcional
+      console.warn('[fetchUserProfile] No se pudo cargar el perfil, usando IDs fijos:', err);
     } finally {
       setLoadingProfile(false);
     }
@@ -133,46 +164,6 @@ export default function IngestionPage() {
     } finally {
       setLoadingJobs(false);
     }
-  };
-
-  // Extract signedUrl from response
-  const extractSignedUrl = (response: SessionResponse): string | null => {
-    const possibleKeys = ['signed_url', 'signedUrl', 'url', 'upload_url', 'signedUploadUrl'];
-    for (const key of possibleKeys) {
-      if (response[key]) {
-        return response[key];
-      }
-    }
-    return null;
-  };
-
-  // Extract IDs from response
-  const extractIds = (response: SessionResponse) => {
-    const jobIdKeys = ['job_id', 'jobId', 'jobId'];
-    const uploadIdKeys = ['upload_id', 'uploadId', 'uploadId'];
-    const correlationIdKeys = ['correlation_id', 'correlationId', 'correlationId'];
-    const hashKeys = ['hash', 'payload_hash', 'payload_hash_sha256'];
-
-    return {
-      jobId: findNestedValue(response, jobIdKeys),
-      uploadId: findNestedValue(response, uploadIdKeys),
-      correlationId: findNestedValue(response, correlationIdKeys),
-      hash: findNestedValue(response, hashKeys),
-    };
-  };
-
-  const findNestedValue = (obj: any, keys: string[]): string | null => {
-    for (const key of keys) {
-      if (obj[key]) return obj[key];
-      // Buscar en objetos anidados
-      for (const k in obj) {
-        if (typeof obj[k] === 'object' && obj[k] !== null) {
-          const found = findNestedValue(obj[k], [key]);
-          if (found) return found;
-        }
-      }
-    }
-    return null;
   };
 
   // Step 1: Create session
@@ -654,14 +645,6 @@ export default function IngestionPage() {
                 <p className="text-red-300 text-sm">{globalError}</p>
               </div>
             </div>
-          </div>
-        )}
-
-        {profileError && (
-          <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
-            <p className="text-yellow-300 text-sm">
-              ⚠️ Advertencia: {profileError}. Los campos se llenarán automáticamente cuando se resuelva.
-            </p>
           </div>
         )}
 
