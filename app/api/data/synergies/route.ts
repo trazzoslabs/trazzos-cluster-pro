@@ -23,6 +23,65 @@ function mapOperationalRow(row: any): any {
   };
 }
 
+/**
+ * Build a lookup map from the companies table: company_id → name.
+ * Also indexes by short_name (lowercase) → name for partial matching.
+ */
+async function buildCompanyLookup(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const { data, error } = await supabaseServer
+    .from('companies')
+    .select('company_id, name, short_name');
+
+  if (error) {
+    console.warn('[synergies] Cannot build company lookup:', error.message);
+    return map;
+  }
+
+  for (const c of data ?? []) {
+    if (c.company_id && c.name) {
+      map.set(c.company_id, c.name);
+      if (c.short_name) map.set(c.short_name.toLowerCase(), c.name);
+    }
+  }
+  return map;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve companies_involved_json entries from UUIDs/codes to human-readable names.
+ */
+function resolveCompanyNames(involved: any, lookup: Map<string, string>): any {
+  if (!involved || lookup.size === 0) return involved;
+
+  if (Array.isArray(involved)) {
+    return involved.map((entry: any) => {
+      if (typeof entry === 'string') {
+        return lookup.get(entry) ?? lookup.get(entry.toLowerCase()) ?? entry;
+      }
+      if (typeof entry === 'object' && entry !== null) {
+        const id = entry.company_id ?? entry.id;
+        const name = entry.name ?? entry.company_name;
+        if (name) return { ...entry, name };
+        if (id && lookup.has(id)) return { ...entry, name: lookup.get(id) };
+        return entry;
+      }
+      return entry;
+    });
+  }
+
+  if (typeof involved === 'string') {
+    if (UUID_RE.test(involved)) return lookup.get(involved) ?? involved;
+    try {
+      const parsed = JSON.parse(involved);
+      return resolveCompanyNames(parsed, lookup);
+    } catch { /* not JSON */ }
+  }
+
+  return involved;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -82,18 +141,30 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // ── Left-join: resolver UUIDs/códigos en companies_involved_json a nombres ──
+    const companyLookup = await buildCompanyLookup();
+    if (companyLookup.size > 0) {
+      rows = rows.map((row: any) => ({
+        ...row,
+        companies_involved_json: resolveCompanyNames(
+          row.companies_involved_json ?? row.companies_involved,
+          companyLookup,
+        ),
+      }));
+    }
+
     // Filtrar por company_id dentro de companies_involved_json si se proveyó
     if (companyId && rows.length > 0) {
+      const nameForId = companyLookup.get(companyId);
       const filtered = rows.filter((s: any) => {
-        const involved = s.companies_involved_json ?? s.companies_involved;
-        if (!involved) return true; // Mostrar siempre si no hay dato
+        const involved = s.companies_involved_json;
+        if (!involved) return true;
         const str = typeof involved === 'string' ? involved : JSON.stringify(involved);
-        return str.includes(companyId);
+        return str.includes(companyId) || (nameForId && str.includes(nameForId));
       });
       if (filtered.length > 0) {
         rows = filtered;
       }
-      // Si el filtro no devuelve nada, mantener todos (no vaciar la vista)
     }
 
     console.log('[synergies] Total rows:', rows.length, '| source:', source || 'ninguna', usedFallback ? '(fallback)' : '');
@@ -108,7 +179,7 @@ export async function GET(request: NextRequest) {
         supabaseServer.from('companies').select('*', { count: 'exact', head: true }).then(r => ({ table: 'companies', count: r.count ?? 0, error: r.error?.message || null })),
       ]);
 
-      const diag: Record<string, any> = { source, used_fallback: usedFallback, total_returned: rows.length };
+      const diag: Record<string, any> = { source, used_fallback: usedFallback, total_returned: rows.length, company_lookup_size: companyLookup.size };
       for (const q of diagQueries) {
         diag[`${q.table}_count`] = q.count;
         if (q.error) diag[`${q.table}_error`] = q.error;

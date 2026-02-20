@@ -59,6 +59,15 @@ interface CommitteeDecision {
 
 type ViewMode = '3d' | 'network' | 'analytics' | 'timeline' | 'geospatial';
 
+/** Extract a human-readable name from a companies_involved_json entry */
+function companyEntryName(entry: any): string {
+  if (typeof entry === 'string') return entry;
+  if (typeof entry === 'object' && entry !== null) {
+    return entry.name ?? entry.company_name ?? entry.company_id ?? '';
+  }
+  return String(entry ?? '');
+}
+
 // Lista de empresas del cluster
 const COMPANIES = [
   'Reficar',
@@ -152,8 +161,9 @@ function GeospatialView({
     
     synergies.forEach(synergy => {
       try {
-        const companies = synergy.companies_involved_json;
-        if (Array.isArray(companies) && companies.length >= 2) {
+        const rawCompanies = synergy.companies_involved_json;
+        if (Array.isArray(rawCompanies) && rawCompanies.length >= 2) {
+          const companies = rawCompanies.map(companyEntryName);
           for (let i = 0; i < companies.length; i++) {
             for (let j = i + 1; j < companies.length; j++) {
               const from = companies[i];
@@ -183,8 +193,9 @@ function GeospatialView({
   const companySynergies = selectedCompany 
     ? synergies.filter(s => {
         try {
-          const companies = s.companies_involved_json;
-          return Array.isArray(companies) && companies.includes(selectedCompany);
+          const raw = s.companies_involved_json;
+          if (!Array.isArray(raw)) return false;
+          return raw.some((e: any) => companyEntryName(e) === selectedCompany);
         } catch {
           return false;
         }
@@ -308,8 +319,9 @@ function GeospatialView({
                 const isSelected = selectedCompany === key;
                 const companySynergyCount = synergies.filter(s => {
                   try {
-                    const companies = s.companies_involved_json;
-                    return Array.isArray(companies) && companies.includes(key);
+                    const raw = s.companies_involved_json;
+                    if (!Array.isArray(raw)) return false;
+                    return raw.some((e: any) => companyEntryName(e) === key);
                   } catch {
                     return false;
                   }
@@ -596,12 +608,11 @@ export default function IntelligencePage() {
       const status = synergy.status || 'pending';
       const color = status === 'approved' ? '#9aff8d' : status === 'rfp' ? '#ffd700' : '#6b7280';
       
-      // Obtener empresas involucradas o asignar una aleatoria
       let companyName = 'Cluster';
       try {
         const companies = synergy.companies_involved_json;
         if (Array.isArray(companies) && companies.length > 0) {
-          companyName = companies[0] || COMPANIES[i % COMPANIES.length];
+          companyName = companyEntryName(companies[0]) || COMPANIES[i % COMPANIES.length];
         } else if (typeof companies === 'string') {
           companyName = companies;
         } else {
@@ -768,8 +779,22 @@ export default function IntelligencePage() {
     };
   };
 
-  // Calcular métricas
-  const totalSavings = purchaseOrders.reduce((sum, po) => sum + (po.total_amount || 0), 0);
+  // ── Helpers para extraer volumen numérico de volume_total_json ──
+  const extractVolume = (v: any): number => {
+    if (!v) return 0;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'object') {
+      const n = v.total ?? v.total_units ?? v.quantity ?? v.amount ?? 0;
+      return typeof n === 'number' ? n : Number(n) || 0;
+    }
+    return Number(v) || 0;
+  };
+
+  // Calcular métricas basadas en volume_total_json de synergies
+  const totalVolume = synergies.reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
+  const totalSavings = totalVolume > 0
+    ? Math.round(totalVolume * 0.12) // estimación conservadora 12 % consolidación
+    : purchaseOrders.reduce((sum, po) => sum + (po.total_amount || 0), 0);
   const activeSynergies = synergies.filter(s => s.status === 'approved' || s.status === 'rfp').length;
   const avgCloseTime = rfps.length > 0 
     ? rfps.reduce((sum, rfp) => {
@@ -950,8 +975,9 @@ export default function IntelligencePage() {
                   {selectedCompanyId && (() => {
                     const companySynergies = synergies.filter(s => {
                       try {
-                        const companies = s.companies_involved_json;
-                        return Array.isArray(companies) && companies.includes(selectedCompanyId);
+                        const raw = s.companies_involved_json;
+                        if (!Array.isArray(raw)) return false;
+                        return raw.some((e: any) => companyEntryName(e) === selectedCompanyId);
                       } catch {
                         return false;
                       }
@@ -1117,12 +1143,11 @@ export default function IntelligencePage() {
                         const status = synergy.status || 'pending';
                         const color = status === 'approved' ? '#9aff8d' : status === 'rfp' ? '#ffd700' : '#6b7280';
                         
-                        // Obtener empresa involucrada
                         let companyName = 'Sinergia';
                         try {
                           const companies = synergy.companies_involved_json;
                           if (Array.isArray(companies) && companies.length > 0) {
-                            companyName = companies[0] || COMPANIES[i % COMPANIES.length];
+                            companyName = companyEntryName(companies[0]) || COMPANIES[i % COMPANIES.length];
                           } else if (typeof companies === 'string') {
                             companyName = companies;
                           } else {
@@ -1195,9 +1220,17 @@ export default function IntelligencePage() {
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
                     <p className="text-4xl font-bold text-[#9aff8d] mb-2">
-                      ${(totalSavings / 1000000).toFixed(1)}M
+                      ${totalSavings > 1_000_000 ? `${(totalSavings / 1_000_000).toFixed(1)}M` : totalSavings.toLocaleString('es-CO')}
                     </p>
-                    <p className="text-base text-zinc-400 font-medium">Ahorro total estimado</p>
+                    <p className="text-base text-zinc-400 font-medium">Ahorro Potencial</p>
+                  </div>
+                </SectionCard>
+                <SectionCard title="" description="">
+                  <div className="text-center py-2">
+                    <p className="text-4xl font-bold text-white mb-2">
+                      {totalVolume > 1_000_000 ? `${(totalVolume / 1_000_000).toFixed(1)}M` : totalVolume.toLocaleString('es-CO')}
+                    </p>
+                    <p className="text-base text-zinc-400 font-medium">Volumen Consolidado</p>
                   </div>
                 </SectionCard>
                 <SectionCard title="" description="">
@@ -1208,21 +1241,114 @@ export default function IntelligencePage() {
                 </SectionCard>
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
-                    <p className="text-4xl font-bold text-white mb-2">{avgCloseTime.toFixed(1)}</p>
-                    <p className="text-base text-zinc-400 font-medium">Días promedio de cierre</p>
-                  </div>
-                </SectionCard>
-                <SectionCard title="" description="">
-                  <div className="text-center py-2">
-                    <p className="text-4xl font-bold text-white mb-2">{approvalRate.toFixed(0)}%</p>
-                    <p className="text-base text-zinc-400 font-medium">Tasa de aprobación</p>
+                    <p className="text-4xl font-bold text-white mb-2">{synergies.length}</p>
+                    <p className="text-base text-zinc-400 font-medium">Total sinergias</p>
                   </div>
                 </SectionCard>
               </div>
 
               {/* Gráficos */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Gráfico de barras por categoría */}
+                {/* Volumen Consolidado por Categoría */}
+                <SectionCard title="Volumen Consolidado por Categoría" description="Suma de volume_total_json por item_category">
+                  <div className="h-64 flex items-end justify-around gap-2">
+                    {(() => {
+                      const categories = Array.from(new Set(synergies.map(s => s.item_category).filter(Boolean)));
+                      const categoryVolumes = categories.map(cat => ({
+                        category: cat,
+                        volume: synergies
+                          .filter(s => s.item_category === cat)
+                          .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0),
+                        count: synergies.filter(s => s.item_category === cat).length,
+                      })).sort((a, b) => b.volume - a.volume).slice(0, 6);
+
+                      const maxVol = Math.max(...categoryVolumes.map(c => c.volume), 1);
+
+                      if (categoryVolumes.length === 0) {
+                        return (
+                          <div className="w-full flex items-center justify-center h-full">
+                            <p className="text-zinc-500 text-sm">Sin datos de volumen</p>
+                          </div>
+                        );
+                      }
+
+                      return categoryVolumes.map((item, i) => {
+                        const height = (item.volume / maxVol) * 100;
+                        const label = item.volume > 1_000_000
+                          ? `${(item.volume / 1_000_000).toFixed(1)}M`
+                          : item.volume > 1_000
+                          ? `${(item.volume / 1_000).toFixed(0)}K`
+                          : item.volume.toLocaleString('es-CO');
+                        return (
+                          <div key={i} className="flex-1 flex flex-col items-center">
+                            <div className="relative w-full h-full flex items-end">
+                              <div
+                                className="w-full bg-gradient-to-t from-[#9aff8d]/80 to-[#9aff8d] rounded-t transition-all hover:opacity-80 cursor-pointer"
+                                style={{ height: `${Math.max(height, 4)}%` }}
+                                title={`${item.count} sinergias — Vol: ${item.volume.toLocaleString('es-CO')}`}
+                              />
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
+                              {item.category || 'Otro'}
+                            </p>
+                            <p className="text-xs text-[#9aff8d] font-bold mt-1">{label}</p>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </SectionCard>
+
+                {/* Ahorro Potencial por Categoría */}
+                <SectionCard title="Ahorro Potencial por Categoría" description="12 % estimado del volumen consolidado">
+                  <div className="h-64 flex items-end justify-around gap-2">
+                    {(() => {
+                      const categories = Array.from(new Set(synergies.map(s => s.item_category).filter(Boolean)));
+                      const categorySavings = categories.map(cat => {
+                        const vol = synergies
+                          .filter(s => s.item_category === cat)
+                          .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
+                        return { category: cat, savings: Math.round(vol * 0.12), count: synergies.filter(s => s.item_category === cat).length };
+                      }).sort((a, b) => b.savings - a.savings).slice(0, 6);
+
+                      const maxSav = Math.max(...categorySavings.map(c => c.savings), 1);
+
+                      if (categorySavings.length === 0) {
+                        return (
+                          <div className="w-full flex items-center justify-center h-full">
+                            <p className="text-zinc-500 text-sm">Sin datos de ahorro</p>
+                          </div>
+                        );
+                      }
+
+                      return categorySavings.map((item, i) => {
+                        const height = (item.savings / maxSav) * 100;
+                        const label = item.savings > 1_000_000
+                          ? `$${(item.savings / 1_000_000).toFixed(1)}M`
+                          : item.savings > 1_000
+                          ? `$${(item.savings / 1_000).toFixed(0)}K`
+                          : `$${item.savings.toLocaleString('es-CO')}`;
+                        return (
+                          <div key={i} className="flex-1 flex flex-col items-center">
+                            <div className="relative w-full h-full flex items-end">
+                              <div
+                                className="w-full bg-gradient-to-t from-[#ffd700]/80 to-[#ffd700] rounded-t transition-all hover:opacity-80 cursor-pointer"
+                                style={{ height: `${Math.max(height, 4)}%` }}
+                                title={`${item.count} sinergias — Ahorro: $${item.savings.toLocaleString('es-CO')}`}
+                              />
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
+                              {item.category || 'Otro'}
+                            </p>
+                            <p className="text-xs text-[#ffd700] font-bold mt-1">{label}</p>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </SectionCard>
+
+                {/* Sinergias por Categoría (conteo) */}
                 <SectionCard title="Sinergias por Categoría" description="">
                   <div className="h-64 flex items-end justify-around gap-2">
                     {(() => {
@@ -1230,9 +1356,17 @@ export default function IntelligencePage() {
                       const categoryCounts = categories.map(cat => ({
                         category: cat,
                         count: synergies.filter(s => s.item_category === cat).length,
-                      })).sort((a, b) => b.count - a.count).slice(0, 5);
+                      })).sort((a, b) => b.count - a.count).slice(0, 6);
                       
                       const maxCount = Math.max(...categoryCounts.map(c => c.count), 1);
+
+                      if (categoryCounts.length === 0) {
+                        return (
+                          <div className="w-full flex items-center justify-center h-full">
+                            <p className="text-zinc-500 text-sm">Sin sinergias</p>
+                          </div>
+                        );
+                      }
                       
                       return categoryCounts.map((item, i) => {
                         const height = (item.count / maxCount) * 100;
@@ -1241,12 +1375,12 @@ export default function IntelligencePage() {
                             <div className="relative w-full h-full flex items-end">
                               <div
                                 className="w-full bg-gradient-to-t from-[#9aff8d]/80 to-[#9aff8d] rounded-t transition-all hover:opacity-80 cursor-pointer"
-                                style={{ height: `${height}%` }}
+                                style={{ height: `${Math.max(height, 4)}%` }}
                                 title={`${item.count} sinergias`}
                               />
                             </div>
-                            <p className="text-sm text-zinc-400 mt-3 text-center font-medium">
-                              {item.category?.substring(0, 12) || 'Categoría'}
+                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
+                              {item.category || 'Categoría'}
                             </p>
                             <p className="text-sm text-[#9aff8d] font-bold mt-1">{item.count}</p>
                           </div>
@@ -1266,6 +1400,8 @@ export default function IntelligencePage() {
                         const pending = synergies.filter(s => !s.status || s.status === 'pending').length;
                         const total = synergies.length;
                         
+                        if (total === 0) return null;
+
                         let currentAngle = 0;
                         const radius = 80;
                         const centerX = 100;

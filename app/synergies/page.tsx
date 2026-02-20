@@ -128,17 +128,27 @@ function SynergiesContent() {
 
   const formatCompanies = (companiesJson: any): string => {
     if (!companiesJson) return 'N/A';
+
+    const extractName = (entry: any): string => {
+      if (typeof entry === 'string') return entry;
+      if (typeof entry === 'object' && entry !== null) {
+        return entry.name ?? entry.company_name ?? entry.company_id ?? JSON.stringify(entry);
+      }
+      return String(entry);
+    };
+
     if (Array.isArray(companiesJson)) {
-      return companiesJson.join(', ');
+      return companiesJson.map(extractName).join(', ');
     }
     if (typeof companiesJson === 'string') {
       try {
         const parsed = JSON.parse(companiesJson);
-        if (Array.isArray(parsed)) return parsed.join(', ');
+        if (Array.isArray(parsed)) return parsed.map(extractName).join(', ');
+        return extractName(parsed);
       } catch { /* not JSON */ }
       return companiesJson;
     }
-    return String(companiesJson);
+    return extractName(companiesJson);
   };
 
   return (
