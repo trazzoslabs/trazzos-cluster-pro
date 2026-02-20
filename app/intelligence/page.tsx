@@ -437,6 +437,7 @@ export default function IntelligencePage() {
   const [geoSelectedCompanyId, setGeoSelectedCompanyId] = useState<string | null>(null);
   const [showConnections, setShowConnections] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const geoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadData();
@@ -448,6 +449,43 @@ export default function IntelligencePage() {
       return cleanup;
     }
   }, [activeMode, synergies]);
+
+  // Re-fetch datos geo cada 30s mientras la vista geoespacial esté activa
+  useEffect(() => {
+    if (activeMode === 'geospatial') {
+      const refreshGeo = async () => {
+        try {
+          const [geoRes, synRes] = await Promise.all([
+            fetch('/api/data/companies-geo'),
+            fetch('/api/data/synergies'),
+          ]);
+          if (geoRes.ok) {
+            const geoData = await geoRes.json();
+            setGeoCompanies(geoData.data || []);
+          }
+          if (synRes.ok) {
+            const synData = await synRes.json();
+            setSynergies(synData.data || []);
+          }
+        } catch {
+          // Silenciar errores de refresco automático
+        }
+      };
+
+      geoIntervalRef.current = setInterval(refreshGeo, 30_000);
+      return () => {
+        if (geoIntervalRef.current) {
+          clearInterval(geoIntervalRef.current);
+          geoIntervalRef.current = null;
+        }
+      };
+    }
+    // Limpiar intervalo al salir del modo geospatial
+    if (geoIntervalRef.current) {
+      clearInterval(geoIntervalRef.current);
+      geoIntervalRef.current = null;
+    }
+  }, [activeMode]);
 
   const loadData = async () => {
     try {

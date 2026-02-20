@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
@@ -118,10 +118,19 @@ export default function IngestionPage() {
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
 
+  // Notificación de job completado
+  const [completionToast, setCompletionToast] = useState<string | null>(null);
+  const [refreshingMarts, setRefreshingMarts] = useState(false);
+  const prevJobStatusRef = useRef<Map<string, string | null>>(new Map());
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Load user profile on mount
   useEffect(() => {
     fetchUserProfile();
     fetchRecentJobs();
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, []);
 
   const fetchUserProfile = async () => {
@@ -156,8 +165,12 @@ export default function IngestionPage() {
       const response = await fetch('/api/data/ingestion-jobs');
       if (response.ok) {
         const result = await response.json();
-        const jobs = (result.data || []).slice(0, 10);
+        const jobs: IngestionJob[] = (result.data || []).slice(0, 10);
         setRecentJobs(jobs);
+        // Guardar estado inicial para detección de transiciones
+        if (prevJobStatusRef.current.size === 0) {
+          jobs.forEach(j => prevJobStatusRef.current.set(j.job_id, j.status));
+        }
       }
     } catch (err) {
       console.error('Error fetching recent jobs:', err);
@@ -165,6 +178,59 @@ export default function IngestionPage() {
       setLoadingJobs(false);
     }
   };
+
+  const handleRefreshMarts = useCallback(async () => {
+    try {
+      setRefreshingMarts(true);
+      const res = await fetch('/api/workflows/refresh-marts', { method: 'POST' });
+      if (!res.ok) {
+        console.warn('[refreshMarts] Status:', res.status);
+      }
+    } catch (err) {
+      console.warn('[refreshMarts] Error:', err);
+    } finally {
+      setRefreshingMarts(false);
+    }
+  }, []);
+
+  const startJobPolling = useCallback(() => {
+    if (pollingRef.current) return;
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const response = await fetch('/api/data/ingestion-jobs');
+        if (!response.ok) return;
+        const result = await response.json();
+        const jobs: IngestionJob[] = (result.data || []).slice(0, 10);
+
+        jobs.forEach(job => {
+          const prev = prevJobStatusRef.current.get(job.job_id);
+          const curr = job.status?.toLowerCase();
+          const wasRunning = prev && ['running', 'processing', 'pending', 'uploading'].includes(prev.toLowerCase());
+          if (wasRunning && curr === 'completed') {
+            setCompletionToast(`Job ${job.job_id.substring(0, 8)}… completado`);
+            handleRefreshMarts();
+            setTimeout(() => setCompletionToast(null), 8000);
+          }
+        });
+
+        const newMap = new Map<string, string | null>();
+        jobs.forEach(j => newMap.set(j.job_id, j.status));
+        prevJobStatusRef.current = newMap;
+        setRecentJobs(jobs);
+
+        const hasActive = jobs.some(j =>
+          ['running', 'processing', 'pending', 'uploading'].includes(j.status?.toLowerCase() || '')
+        );
+        if (!hasActive && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch {
+        // Silenciar errores de polling
+      }
+    }, 10_000);
+  }, [handleRefreshMarts]);
 
   // Step 1: Create session
   const handleCreateSession = async () => {
@@ -458,8 +524,9 @@ export default function IngestionPage() {
       setConfirmResponse(result.data || result);
       setSuccessConfirm(true);
       
-      // Refresh jobs list
+      // Refresh jobs list y empezar polling para detectar completados
       fetchRecentJobs();
+      startJobPolling();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to confirm';
       console.error('[handleConfirm] Error capturado:', err);
@@ -535,6 +602,23 @@ export default function IngestionPage() {
 
   return (
     <div>
+      {/* Toast de job completado */}
+      {completionToast && (
+        <div className="fixed top-24 right-6 z-50 animate-[fadeInScale_0.3s_ease-out_forwards]">
+          <div className="bg-green-900/90 backdrop-blur-sm border border-green-600 rounded-lg p-4 shadow-xl flex items-center gap-3 min-w-[300px]">
+            <svg className="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-green-200 text-sm font-medium">{completionToast}</p>
+            <button onClick={() => setCompletionToast(null)} className="text-green-400 hover:text-white ml-auto">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
       <PageTitle
         title="Cargas de Datos"
         subtitle="Sube y procesa archivos para análisis y normalización"
@@ -693,6 +777,29 @@ export default function IngestionPage() {
         title="Jobs recientes"
         description="Últimas cargas procesadas en el sistema"
       >
+        {/* Barra de acciones */}
+        <div className="flex items-center justify-end gap-2 mb-4">
+          <button
+            onClick={handleRefreshMarts}
+            disabled={refreshingMarts}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded-lg text-xs font-medium transition-colors border border-zinc-700"
+          >
+            <svg className={`w-3.5 h-3.5 ${refreshingMarts ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {refreshingMarts ? 'Refrescando…' : 'Refrescar Vistas'}
+          </button>
+          <button
+            onClick={() => fetchRecentJobs()}
+            disabled={loadingJobs}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded-lg text-xs font-medium transition-colors border border-zinc-700"
+          >
+            <svg className={`w-3.5 h-3.5 ${loadingJobs ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Recargar Jobs
+          </button>
+        </div>
         {loadingJobs ? (
           <div className="text-center py-8">
             <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[#9aff8d] mb-2"></div>
