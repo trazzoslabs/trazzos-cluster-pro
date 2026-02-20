@@ -291,10 +291,8 @@ export default function IngestionPage() {
       setErrorUpload(null);
       setSuccessUpload(false);
 
-      // Usar FormData para soportar diferentes tipos de archivo
-      const formData = new FormData();
-      formData.append('file', file);
-
+      // Subir archivo directamente a S3 usando la signedUrl
+      // El archivo se envía como body binario, no como FormData
       const response = await fetch(signedUrl, {
         method: 'PUT',
         body: file,
@@ -398,8 +396,43 @@ export default function IngestionPage() {
         throw new Error(errorMsg);
       }
 
-      const result = await response.json();
+      // Verificar si la respuesta está vacía o no tiene datos
+      let result;
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const text = await response.text();
+          console.log('[handleConfirm] Respuesta raw (texto):', text);
+          
+          if (!text || text.trim() === '' || text.trim() === '{}' || text.trim() === '[]') {
+            console.warn('[handleConfirm] Respuesta vacía o sin datos de n8n');
+            throw new Error('n8n workflow failed: No item to return was found - La respuesta está vacía');
+          }
+          
+          result = JSON.parse(text);
+        } else {
+          const text = await response.text();
+          if (!text || text.trim() === '') {
+            console.warn('[handleConfirm] Respuesta vacía de n8n');
+            throw new Error('n8n workflow failed: No item to return was found - La respuesta está vacía');
+          }
+          result = { message: text };
+        }
+      } catch (parseError) {
+        if (parseError instanceof Error && parseError.message.includes('No item to return')) {
+          throw parseError;
+        }
+        console.error('[handleConfirm] Error al parsear respuesta:', parseError);
+        throw new Error('n8n workflow failed: No se pudo procesar la respuesta del servidor');
+      }
+
       console.log('[handleConfirm] Datos recibidos:', result);
+      
+      // Verificar que result tenga datos válidos
+      if (!result || (typeof result === 'object' && Object.keys(result).length === 0)) {
+        console.warn('[handleConfirm] Resultado vacío después del parseo');
+        throw new Error('n8n workflow failed: No item to return was found - El resultado está vacío');
+      }
       
       setConfirmResponse(result.data || result);
       setSuccessConfirm(true);
@@ -619,17 +652,6 @@ export default function IngestionPage() {
                 className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
               >
                 {uploading ? 'Subiendo...' : 'Subir archivo'}
-              </button>
-            )}
-
-            {successUpload && (
-              <button
-                type="button"
-                onClick={handleConfirm}
-                disabled={loadingConfirm || loadingSession || uploading}
-                className="px-6 py-3 bg-green-600 hover:bg-green-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-              >
-                {loadingConfirm ? 'Confirmando...' : 'Confirmar y procesar'}
               </button>
             )}
           </div>
