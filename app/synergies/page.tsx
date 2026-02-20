@@ -111,9 +111,31 @@ function SynergiesContent() {
     if (!volumeJson) return 'N/A';
     if (typeof volumeJson === 'number') return volumeJson.toLocaleString('es-CO');
     if (typeof volumeJson === 'object') {
-      return JSON.stringify(volumeJson);
+      const total = volumeJson.total ?? volumeJson.total_units ?? volumeJson.quantity;
+      const uom = volumeJson.uom ?? volumeJson.unit ?? '';
+      if (total !== undefined) {
+        return `${Number(total).toLocaleString('es-CO')}${uom ? ` ${uom}` : ''}`;
+      }
+      const entries = Object.entries(volumeJson).slice(0, 3);
+      if (entries.length === 0) return 'N/A';
+      return entries.map(([k, v]) => `${k}: ${v}`).join(', ');
     }
     return String(volumeJson);
+  };
+
+  const formatCompanies = (companiesJson: any): string => {
+    if (!companiesJson) return 'N/A';
+    if (Array.isArray(companiesJson)) {
+      return companiesJson.join(', ');
+    }
+    if (typeof companiesJson === 'string') {
+      try {
+        const parsed = JSON.parse(companiesJson);
+        if (Array.isArray(parsed)) return parsed.join(', ');
+      } catch { /* not JSON */ }
+      return companiesJson;
+    }
+    return String(companiesJson);
   };
 
   return (
@@ -153,6 +175,7 @@ function SynergiesContent() {
               <thead className="bg-zinc-900">
                 <tr>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Categoría</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Empresas</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Ventana Inicio</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Ventana Fin</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Volumen Total</th>
@@ -165,6 +188,9 @@ function SynergiesContent() {
                   <tr key={synergy.synergy_id} className="hover:bg-zinc-700/50 transition-colors">
                     <td className="px-4 py-3 text-sm text-white font-medium">
                       {synergy.item_category}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-zinc-400 max-w-[200px]">
+                      {formatCompanies(synergy.companies_involved_json)}
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-400">
                       {formatDate(synergy.window_start)}

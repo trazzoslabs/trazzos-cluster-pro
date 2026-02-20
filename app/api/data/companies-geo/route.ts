@@ -144,15 +144,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // ── Fallback: completar con mock hasta tener al menos 6 puntos ──
-    if (result.length < 6) {
-      const existingNames = new Set(result.map(c => c.name.toLowerCase()));
-      const additional = MOCK_COMPANIES.filter(
-        m => !seenIds.has(m.id) && !existingNames.has(m.name.toLowerCase())
-      ).slice(0, 6 - result.length);
-      additional.forEach(addCompany);
-      console.log('[companies-geo] Completado con %d mocks → total %d', additional.length, result.length);
+    // ── Fallback: siempre garantizar al menos los 6 puntos mock de Cartagena ──
+    if (result.length === 0) {
+      console.log('[companies-geo] Sin datos reales — usando 6 mocks de Cartagena');
+      return createSuccessResponse(MOCK_COMPANIES);
     }
+
+    // Completar con mocks restantes si hay menos de 6
+    const existingNames = new Set(result.map(c => c.name.toLowerCase()));
+    for (const mock of MOCK_COMPANIES) {
+      if (result.length >= 6) break;
+      if (!seenIds.has(mock.id) && !existingNames.has(mock.name.toLowerCase())) {
+        addCompany(mock);
+      }
+    }
+    console.log('[companies-geo] Total empresas a devolver:', result.length);
 
     return createSuccessResponse(result);
   } catch (error) {
