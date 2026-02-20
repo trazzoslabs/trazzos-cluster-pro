@@ -18,13 +18,20 @@ interface IngestionJob {
 }
 
 export default function IngestionPage() {
+  // IDs fijos según requerimiento
+  const FIXED_COMPANY_ID = 'aaaa1111-1111-4111-a111-111111111111'; // Reficar
+  const FIXED_USER_ID = 'bff82884-0263-4bc1-8895-3567c2c02b55';
+
   // Form inputs
   const [datasetType, setDatasetType] = useState<string>('shutdowns');
-  const [companyId, setCompanyId] = useState<string>('');
-  const [userId, setUserId] = useState<string>('');
+  const [companyId, setCompanyId] = useState<string>(FIXED_COMPANY_ID);
+  const [userId, setUserId] = useState<string>(FIXED_USER_ID);
   const [userEmail, setUserEmail] = useState<string>('');
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
+  
+  // Error global para mostrar en alerta roja
+  const [globalError, setGlobalError] = useState<string | null>(null);
 
   // User profile loading state
   const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
@@ -76,9 +83,9 @@ export default function IngestionPage() {
       const profile = result.data;
 
       if (profile) {
-        setUserId(profile.user_id || '');
-        setCompanyId(profile.company_id || '');
+        // Mantener los IDs fijos, solo actualizar email
         setUserEmail(profile.email || '');
+        // Los IDs se mantienen en los valores fijos
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load user profile';
@@ -147,48 +154,83 @@ export default function IngestionPage() {
 
   // Step 1: Create session
   const handleCreateSession = async () => {
+    console.log('[handleCreateSession] Iniciando creación de sesión...');
+    setGlobalError(null);
+    
     if (!file) {
-      setErrorSession('Por favor selecciona un archivo');
+      const errorMsg = 'Por favor selecciona un archivo';
+      console.error('[handleCreateSession] Error:', errorMsg);
+      setErrorSession(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
-    // Validar que tenemos los datos del perfil cargados
-    if (!companyId.trim()) {
-      setErrorSession('Company ID no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
+    console.log('[handleCreateSession] Archivo seleccionado:', {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+    });
+
+    // Validar tipo de archivo
+    const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    if (!validExtensions.includes(fileExtension)) {
+      const errorMsg = `Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`;
+      console.error('[handleCreateSession] Error:', errorMsg);
+      setErrorSession(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
-    if (!userId.trim()) {
-      setErrorSession('User ID no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
-      return;
-    }
+    // Usar IDs fijos siempre
+    const finalCompanyId = FIXED_COMPANY_ID;
+    const finalUserId = FIXED_USER_ID;
+
+    console.log('[handleCreateSession] IDs a usar:', {
+      company_id: finalCompanyId,
+      user_id: finalUserId,
+    });
 
     try {
       setLoadingSession(true);
       setErrorSession(null);
       setSuccessSession(false);
 
+      const payload = {
+        company_id: finalCompanyId,
+        user_id: finalUserId,
+        file_name: file.name,
+        file_type: file.type || 'application/octet-stream',
+        dataset_type: datasetType,
+      };
+
+      console.log('[handleCreateSession] Enviando request a /api/workflows/upload-session:', payload);
+
       const response = await fetch('/api/workflows/upload-session', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          company_id: companyId.trim(),
-          user_id: userId.trim(),
-          file_name: file.name,
-          file_type: file.type || 'application/octet-stream',
-          dataset_type: datasetType,
-        }),
+        body: JSON.stringify(payload),
+      });
+
+      console.log('[handleCreateSession] Respuesta recibida:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
       });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(errorData.error || errorData.message || `Failed to create session: ${response.statusText}`);
+        const errorMsg = errorData.error || errorData.message || `Failed to create session: ${response.statusText}`;
+        console.error('[handleCreateSession] Error en respuesta:', errorMsg);
+        throw new Error(errorMsg);
       }
 
       const result = await response.json();
       const data = result.data || result;
+      
+      console.log('[handleCreateSession] Datos recibidos:', data);
       
       setSessionResponse(data);
       setSuccessSession(true);
@@ -196,37 +238,62 @@ export default function IngestionPage() {
       const ids = extractIds(data);
       if (ids.jobId) {
         setJobId(ids.jobId);
+        console.log('[handleCreateSession] Job ID extraído:', ids.jobId);
       }
       
       const url = extractSignedUrl(data);
       if (url) {
         setSignedUrl(url);
+        console.log('[handleCreateSession] Signed URL obtenida');
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to create session';
+      console.error('[handleCreateSession] Error capturado:', err);
       setErrorSession(errorMessage);
+      setGlobalError(errorMessage);
       setSuccessSession(false);
     } finally {
       setLoadingSession(false);
+      console.log('[handleCreateSession] Finalizado, loadingSession:', false);
     }
   };
 
   // Step 2: Upload file
   const handleUploadFile = async () => {
+    console.log('[handleUploadFile] Iniciando subida de archivo...');
+    setGlobalError(null);
+    
     if (!file) {
-      setErrorUpload('Archivo es requerido');
+      const errorMsg = 'Archivo es requerido';
+      console.error('[handleUploadFile] Error:', errorMsg);
+      setErrorUpload(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
     if (!signedUrl) {
-      setErrorUpload('Falta signed_url. Por favor crea una sesión primero.');
+      const errorMsg = 'Falta signed_url. Por favor crea una sesión primero.';
+      console.error('[handleUploadFile] Error:', errorMsg);
+      setErrorUpload(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
+
+    console.log('[handleUploadFile] Subiendo archivo:', {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      signedUrl: signedUrl.substring(0, 50) + '...',
+    });
 
     try {
       setUploading(true);
       setErrorUpload(null);
       setSuccessUpload(false);
+
+      // Usar FormData para soportar diferentes tipos de archivo
+      const formData = new FormData();
+      formData.append('file', file);
 
       const response = await fetch(signedUrl, {
         method: 'PUT',
@@ -236,69 +303,104 @@ export default function IngestionPage() {
         },
       });
 
+      console.log('[handleUploadFile] Respuesta de subida:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+      });
+
       setUploadStatus(response.status);
 
       if (response.status === 200 || response.status === 201 || response.status === 204) {
+        console.log('[handleUploadFile] Archivo subido exitosamente');
         setSuccessUpload(true);
       } else {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`Upload failed with status ${response.status}: ${errorText || 'Unknown error'}`);
+        const errorMsg = `Upload failed with status ${response.status}: ${errorText || 'Unknown error'}`;
+        console.error('[handleUploadFile] Error en subida:', errorMsg);
+        throw new Error(errorMsg);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to upload file';
+      console.error('[handleUploadFile] Error capturado:', err);
       setErrorUpload(errorMessage);
+      setGlobalError(errorMessage);
       setSuccessUpload(false);
     } finally {
       setUploading(false);
+      console.log('[handleUploadFile] Finalizado, uploading:', false);
     }
   };
 
   // Step 3: Confirm
   const handleConfirm = async () => {
+    console.log('[handleConfirm] Iniciando confirmación...');
+    setGlobalError(null);
+    
     if (!sessionResponse) {
-      setErrorConfirm('Sesión no encontrada. Por favor crea una sesión primero.');
+      const errorMsg = 'Sesión no encontrada. Por favor crea una sesión primero.';
+      console.error('[handleConfirm] Error:', errorMsg);
+      setErrorConfirm(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
     if (!successUpload) {
-      setErrorConfirm('Por favor sube el archivo primero antes de confirmar.');
+      const errorMsg = 'Por favor sube el archivo primero antes de confirmar.';
+      console.error('[handleConfirm] Error:', errorMsg);
+      setErrorConfirm(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
     const ids = extractIds(sessionResponse);
     if (!ids.uploadId) {
-      setErrorConfirm('Falta upload_id en respuesta de sesión.');
+      const errorMsg = 'Falta upload_id en respuesta de sesión.';
+      console.error('[handleConfirm] Error:', errorMsg);
+      setErrorConfirm(errorMsg);
+      setGlobalError(errorMsg);
       return;
     }
 
-    if (!userEmail.trim()) {
-      setErrorConfirm('User Email no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
-      return;
-    }
+    console.log('[handleConfirm] IDs extraídos:', ids);
 
     try {
       setLoadingConfirm(true);
       setErrorConfirm(null);
       setSuccessConfirm(false);
 
+      const payload = {
+        upload_id: ids.uploadId,
+        user_email: userEmail.trim() || 'user@example.com', // Fallback si no hay email
+        app_url: appUrl.trim() || undefined,
+      };
+
+      console.log('[handleConfirm] Enviando request a /api/workflows/upload-confirm:', payload);
+
       const response = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          upload_id: ids.uploadId,
-          user_email: userEmail.trim(),
-          app_url: appUrl.trim() || undefined,
-        }),
+        body: JSON.stringify(payload),
+      });
+
+      console.log('[handleConfirm] Respuesta recibida:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
       });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(errorData.error || errorData.message || `Failed to confirm: ${response.statusText}`);
+        const errorMsg = errorData.error || errorData.message || `Failed to confirm: ${response.statusText}`;
+        console.error('[handleConfirm] Error en respuesta:', errorMsg);
+        throw new Error(errorMsg);
       }
 
       const result = await response.json();
+      console.log('[handleConfirm] Datos recibidos:', result);
+      
       setConfirmResponse(result.data || result);
       setSuccessConfirm(true);
       
@@ -306,10 +408,47 @@ export default function IngestionPage() {
       fetchRecentJobs();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to confirm';
+      console.error('[handleConfirm] Error capturado:', err);
       setErrorConfirm(errorMessage);
+      setGlobalError(errorMessage);
       setSuccessConfirm(false);
     } finally {
       setLoadingConfirm(false);
+      console.log('[handleConfirm] Finalizado, loadingConfirm:', false);
+    }
+  };
+
+  // Función unificada para manejar el submit del formulario
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    console.log('[handleUpload] Formulario enviado');
+    setGlobalError(null);
+    
+    // Validar archivo primero
+    if (!file) {
+      const errorMsg = 'Por favor selecciona un archivo';
+      console.error('[handleUpload] Error:', errorMsg);
+      setGlobalError(errorMsg);
+      return;
+    }
+
+    // Validar tipo de archivo
+    const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    if (!validExtensions.includes(fileExtension)) {
+      const errorMsg = `Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`;
+      console.error('[handleUpload] Error:', errorMsg);
+      setGlobalError(errorMsg);
+      return;
+    }
+
+    // Flujo: Si no hay sesión, crear una. Si hay sesión pero no se subió, subir. Si ya se subió, confirmar.
+    if (!successSession) {
+      await handleCreateSession();
+    } else if (!successUpload && signedUrl) {
+      await handleUploadFile();
+    } else if (successUpload) {
+      await handleConfirm();
     }
   };
 
@@ -361,8 +500,18 @@ export default function IngestionPage() {
             </label>
             <input
               type="file"
-              accept=".csv,.xlsx"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              accept=".csv,.json,.jsonl,.xlsx"
+              onChange={(e) => {
+                const selectedFile = e.target.files?.[0] || null;
+                setFile(selectedFile);
+                if (selectedFile) {
+                  console.log('[File Input] Archivo seleccionado:', {
+                    name: selectedFile.name,
+                    size: selectedFile.size,
+                    type: selectedFile.type,
+                  });
+                }
+              }}
               className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
             />
             {file && (
@@ -380,12 +529,10 @@ export default function IngestionPage() {
               value={companyId}
               disabled
               readOnly
-              placeholder={loadingProfile ? 'Cargando...' : 'uuid'}
+              placeholder="Reficar (fijo)"
               className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
-            {companyId && (
-              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu perfil</p>
-            )}
+            <p className="mt-1 text-xs text-zinc-500">Valor fijo: Reficar</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -396,12 +543,10 @@ export default function IngestionPage() {
               value={userId}
               disabled
               readOnly
-              placeholder={loadingProfile ? 'Cargando...' : 'uuid'}
+              placeholder="Usuario fijo"
               className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
-            {userId && (
-              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu sesión</p>
-            )}
+            <p className="mt-1 text-xs text-zinc-500">Valor fijo asignado</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -420,6 +565,21 @@ export default function IngestionPage() {
             )}
           </div>
         </div>
+
+        {/* Alerta de error global (roja) */}
+        {globalError && (
+          <div className="bg-red-900/30 border-2 border-red-600 rounded-lg p-4 mb-4 animate-pulse">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <p className="text-red-200 font-semibold text-sm mb-1">Error en la carga</p>
+                <p className="text-red-300 text-sm">{globalError}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {profileError && (
           <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
@@ -441,35 +601,39 @@ export default function IngestionPage() {
           </div>
         )}
 
-        <div className="flex gap-4">
-          <button
-            onClick={handleCreateSession}
-            disabled={loadingSession || loadingProfile || !file || !companyId.trim() || !userId.trim()}
-            className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-          >
-            {loadingProfile ? 'Cargando perfil...' : loadingSession ? 'Iniciando...' : 'Iniciar carga'}
-          </button>
-
-          {successSession && (
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div className="flex gap-4">
             <button
-              onClick={handleUploadFile}
-              disabled={uploading || !signedUrl || !file}
-              className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
+              type="submit"
+              disabled={loadingSession || uploading || loadingConfirm || !file}
+              className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
             >
-              {uploading ? 'Subiendo...' : 'Subir archivo'}
+              {loadingSession ? 'Iniciando...' : uploading ? 'Subiendo...' : loadingConfirm ? 'Confirmando...' : successUpload ? 'Confirmar y procesar' : successSession ? 'Subir archivo' : 'Iniciar carga'}
             </button>
-          )}
 
-          {successUpload && (
-            <button
-              onClick={handleConfirm}
-              disabled={loadingConfirm || !userEmail.trim()}
-              className="px-6 py-3 bg-green-600 hover:bg-green-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-            >
-              {loadingConfirm ? 'Confirmando...' : 'Confirmar y procesar'}
-            </button>
-          )}
-        </div>
+            {successSession && !successUpload && (
+              <button
+                type="button"
+                onClick={handleUploadFile}
+                disabled={uploading || loadingSession || loadingConfirm || !signedUrl || !file}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
+              >
+                {uploading ? 'Subiendo...' : 'Subir archivo'}
+              </button>
+            )}
+
+            {successUpload && (
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={loadingConfirm || loadingSession || uploading}
+                className="px-6 py-3 bg-green-600 hover:bg-green-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
+              >
+                {loadingConfirm ? 'Confirmando...' : 'Confirmar y procesar'}
+              </button>
+            )}
+          </div>
+        </form>
 
         {jobId && (
           <div className="mt-6 bg-zinc-900 border border-zinc-700 rounded-lg p-4">
