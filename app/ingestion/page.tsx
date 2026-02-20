@@ -57,6 +57,29 @@ export default function IngestionPage() {
   const [errorConfirm, setErrorConfirm] = useState<string | null>(null);
   const [successConfirm, setSuccessConfirm] = useState(false);
 
+  // Extraer uploadId de sessionResponse para determinar el estado del botón
+  const uploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
+  const isConfirmed = successConfirm;
+
+  // Texto del botón según el estado
+  const getButtonText = (): string => {
+    if (loadingSession) return 'Iniciando...';
+    if (uploading) return 'Subiendo...';
+    if (loadingConfirm) return 'Confirmando...';
+    
+    if (!uploadId) {
+      return 'Subir archivo';
+    }
+    
+    if (uploadId && !isConfirmed) {
+      return 'Confirmar y procesar';
+    }
+    
+    return 'Procesado';
+  };
+
+  const buttonText = getButtonText();
+
   // Recent Jobs
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
@@ -246,12 +269,16 @@ export default function IngestionPage() {
         setSignedUrl(url);
         console.log('[handleCreateSession] Signed URL obtenida');
       }
+
+      // Retornar datos para uso inmediato
+      return { data, signedUrl: url, uploadId: ids.uploadId };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to create session';
       console.error('[handleCreateSession] Error capturado:', err);
       setErrorSession(errorMessage);
       setGlobalError(errorMessage);
       setSuccessSession(false);
+      return null; // Retornar null en caso de error
     } finally {
       setLoadingSession(false);
       console.log('[handleCreateSession] Finalizado, loadingSession:', false);
@@ -312,6 +339,7 @@ export default function IngestionPage() {
       if (response.status === 200 || response.status === 201 || response.status === 204) {
         console.log('[handleUploadFile] Archivo subido exitosamente');
         setSuccessUpload(true);
+        return true; // Retornar éxito
       } else {
         const errorText = await response.text().catch(() => '');
         const errorMsg = `Upload failed with status ${response.status}: ${errorText || 'Unknown error'}`;
@@ -324,6 +352,7 @@ export default function IngestionPage() {
       setErrorUpload(errorMessage);
       setGlobalError(errorMessage);
       setSuccessUpload(false);
+      return false; // Retornar error
     } finally {
       setUploading(false);
       console.log('[handleUploadFile] Finalizado, uploading:', false);
@@ -475,12 +504,26 @@ export default function IngestionPage() {
       return;
     }
 
-    // Flujo: Si no hay sesión, crear una. Si hay sesión pero no se subió, subir. Si ya se subió, confirmar.
-    if (!successSession) {
-      await handleCreateSession();
-    } else if (!successUpload && signedUrl) {
-      await handleUploadFile();
-    } else if (successUpload) {
+    // Flujo basado en uploadId:
+    // - Si no hay uploadId, crear sesión y luego subir archivo
+    // - Si hay uploadId pero no está confirmado, confirmar
+    const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
+    
+    if (!currentUploadId) {
+      // Paso 1: Crear sesión
+      const sessionResult = await handleCreateSession();
+      
+      // Paso 2: Si la sesión fue exitosa y tenemos signedUrl, subir archivo
+      if (sessionResult?.signedUrl) {
+        const uploadSuccess = await handleUploadFile();
+        if (!uploadSuccess) {
+          return; // Si falla la subida, detener el flujo
+        }
+      } else {
+        return; // Si no hay signedUrl, detener el flujo
+      }
+    } else if (currentUploadId && !isConfirmed && successUpload) {
+      // Paso 3: Confirmar (solo si el archivo ya se subió)
       await handleConfirm();
     }
   };
@@ -635,26 +678,13 @@ export default function IngestionPage() {
         )}
 
         <form onSubmit={handleUpload} className="space-y-4">
-          <div className="flex gap-4">
-            <button
-              type="submit"
-              disabled={loadingSession || uploading || loadingConfirm || !file}
-              className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-            >
-              {loadingSession ? 'Iniciando...' : uploading ? 'Subiendo...' : loadingConfirm ? 'Confirmando...' : successUpload ? 'Confirmar y procesar' : successSession ? 'Subir archivo' : 'Iniciar carga'}
-            </button>
-
-            {successSession && !successUpload && (
-              <button
-                type="button"
-                onClick={handleUploadFile}
-                disabled={uploading || loadingSession || loadingConfirm || !signedUrl || !file}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-400 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-              >
-                {uploading ? 'Subiendo...' : 'Subir archivo'}
-              </button>
-            )}
-          </div>
+          <button
+            type="submit"
+            disabled={loadingSession || uploading || loadingConfirm || !file || isConfirmed}
+            className="w-full px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
+          >
+            {buttonText}
+          </button>
         </form>
 
         {jobId && (
