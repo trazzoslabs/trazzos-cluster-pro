@@ -168,15 +168,16 @@ function SynergiesContent() {
           </p>
           {rawResponse?._debug && (
             <div className="inline-block text-left bg-zinc-900 border border-zinc-700 rounded-lg p-4 text-xs space-y-1">
-              <p className="text-zinc-500">Diagnóstico de tablas fuente:</p>
-              <p className="text-zinc-400">needs: <span className="text-white font-mono">{rawResponse._debug.needs_count}</span></p>
-              <p className="text-zinc-400">shutdowns: <span className="text-white font-mono">{rawResponse._debug.shutdowns_count}</span></p>
-              <p className="text-zinc-400">companies: <span className="text-white font-mono">{rawResponse._debug.companies_count}</span></p>
-              {rawResponse._debug.needs_count === 0 && rawResponse._debug.shutdowns_count === 0 && (
-                <p className="text-yellow-400 mt-2">Las tablas fuente están vacías. Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot;.</p>
+              <p className="text-zinc-500">Diagnóstico de tablas:</p>
+              <p className="text-zinc-400">operational_data: <span className="text-white font-mono">{rawResponse._debug.operational_data_count ?? '?'}</span></p>
+              <p className="text-zinc-400">synergies: <span className="text-white font-mono">{rawResponse._debug.synergies_count ?? '?'}</span></p>
+              <p className="text-zinc-400">needs: <span className="text-white font-mono">{rawResponse._debug.needs_count ?? '?'}</span></p>
+              <p className="text-zinc-400">shutdowns: <span className="text-white font-mono">{rawResponse._debug.shutdowns_count ?? '?'}</span></p>
+              {(rawResponse._debug.operational_data_count ?? 0) === 0 && (rawResponse._debug.synergies_count ?? 0) === 0 && (
+                <p className="text-yellow-400 mt-2">Ninguna tabla tiene datos de sinergias. Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot;.</p>
               )}
-              {(rawResponse._debug.needs_count > 0 || rawResponse._debug.shutdowns_count > 0) && (
-                <p className="text-yellow-400 mt-2">Hay datos fuente pero no se generaron sinergias. Ejecuta &quot;Refrescar Vistas&quot; desde Ingesta.</p>
+              {((rawResponse._debug.operational_data_count ?? 0) > 0 || (rawResponse._debug.needs_count ?? 0) > 0) && (rawResponse._debug.synergies_count ?? 0) === 0 && (
+                <p className="text-yellow-400 mt-2">Hay datos en operational_data o needs, pero no en synergies. Ejecuta &quot;Refrescar Vistas&quot; desde Ingesta.</p>
               )}
             </div>
           )}
@@ -278,33 +279,29 @@ function SynergiesContent() {
           {showDebug && (
             <div className="mt-2 bg-zinc-900 border border-zinc-700 rounded-lg p-4 overflow-auto max-h-[500px]">
               {rawResponse?._debug && (
-                <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
-                  <div className="bg-zinc-800 rounded p-2">
-                    <span className="text-zinc-400">synergies:</span>{' '}
-                    <span className="text-white font-mono">{rawResponse._debug.synergies_count}</span>
+                <div className="mb-4 space-y-2 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-500">Fuente:</span>
+                    <span className="text-white font-mono">{rawResponse._debug.source || 'ninguna'}</span>
+                    {rawResponse._debug.used_fallback && (
+                      <span className="text-yellow-400">(fallback)</span>
+                    )}
                   </div>
-                  <div className="bg-zinc-800 rounded p-2">
-                    <span className="text-zinc-400">needs:</span>{' '}
-                    <span className="text-white font-mono">{rawResponse._debug.needs_count}</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {['operational_data', 'synergies', 'needs', 'shutdowns', 'companies'].map(t => (
+                      <div key={t} className="bg-zinc-800 rounded p-2">
+                        <span className="text-zinc-400">{t}:</span>{' '}
+                        <span className="text-white font-mono">
+                          {rawResponse._debug[`${t}_count`] ?? '?'}
+                        </span>
+                        {rawResponse._debug[`${t}_error`] && (
+                          <span className="text-red-400 block text-[10px] mt-0.5">
+                            {rawResponse._debug[`${t}_error`]}
+                          </span>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  <div className="bg-zinc-800 rounded p-2">
-                    <span className="text-zinc-400">shutdowns:</span>{' '}
-                    <span className="text-white font-mono">{rawResponse._debug.shutdowns_count}</span>
-                  </div>
-                  <div className="bg-zinc-800 rounded p-2">
-                    <span className="text-zinc-400">companies:</span>{' '}
-                    <span className="text-white font-mono">{rawResponse._debug.companies_count}</span>
-                  </div>
-                  {rawResponse._debug.needs_error && (
-                    <div className="col-span-2 bg-red-900/20 border border-red-800 rounded p-2 text-red-400">
-                      needs error: {rawResponse._debug.needs_error}
-                    </div>
-                  )}
-                  {rawResponse._debug.shutdowns_error && (
-                    <div className="col-span-2 bg-red-900/20 border border-red-800 rounded p-2 text-red-400">
-                      shutdowns error: {rawResponse._debug.shutdowns_error}
-                    </div>
-                  )}
                 </div>
               )}
               <pre className="text-xs text-zinc-400 whitespace-pre-wrap font-mono">

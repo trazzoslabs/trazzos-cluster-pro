@@ -4,6 +4,29 @@ import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '..
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
+/**
+ * Renombra campos de salida de n8n al esquema de Supabase:
+ *   companies_involved  → companies_involved_json
+ *   volume_total        → volume_total_json
+ * Funciona recursivamente en objetos y arrays.
+ */
+function mapN8nFields(obj: any): any {
+  if (Array.isArray(obj)) return obj.map(mapN8nFields);
+  if (obj === null || typeof obj !== 'object') return obj;
+
+  const RENAMES: Record<string, string> = {
+    companies_involved: 'companies_involved_json',
+    volume_total: 'volume_total_json',
+  };
+
+  const out: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    const newKey = RENAMES[key] ?? key;
+    out[newKey] = (typeof val === 'object' && val !== null) ? mapN8nFields(val) : val;
+  }
+  return out;
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (!N8N_WEBHOOK_BASE) {
@@ -92,7 +115,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return createSuccessResponse(data, response.status, correlationId);
+    // Mapear campos de salida de n8n al esquema de Supabase
+    const mapped = mapN8nFields(data);
+
+    return createSuccessResponse(mapped, response.status, correlationId);
   } catch (error) {
     console.error('Unexpected error in POST /api/workflows/upload-confirm:', error);
     return createErrorResponse('Internal server error', 500);
