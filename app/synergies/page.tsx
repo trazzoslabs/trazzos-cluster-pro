@@ -25,11 +25,13 @@ function SynergiesContent() {
   const clusterId = searchParams.get('cluster_id');
   
   const [synergies, setSynergies] = useState<Synergy[]>([]);
+  const [rawResponse, setRawResponse] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creatingRfp, setCreatingRfp] = useState<string | null>(null);
   const [rfpError, setRfpError] = useState<string | null>(null);
   const [rfpSuccess, setRfpSuccess] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     async function fetchSynergies() {
@@ -37,17 +39,18 @@ function SynergiesContent() {
         setLoading(true);
         setError(null);
         
-        const url = clusterId 
-          ? `/api/data/synergies?cluster_id=${clusterId}`
-          : '/api/data/synergies';
+        const base = clusterId 
+          ? `/api/data/synergies?cluster_id=${clusterId}&debug=1`
+          : '/api/data/synergies?debug=1';
         
-        const response = await fetch(url);
+        const response = await fetch(base);
         
         if (!response.ok) {
           throw new Error(`Failed to fetch synergies: ${response.statusText}`);
         }
 
         const result = await response.json();
+        setRawResponse(result);
         setSynergies(result.data || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load synergies');
@@ -159,12 +162,30 @@ function SynergiesContent() {
       )}
 
       {!loading && !error && synergies.length === 0 && (
-        <div className="text-center py-12">
+        <div className="text-center py-12 space-y-3">
           <p className="text-zinc-400">
-            {clusterId 
-              ? 'No hay sinergias disponibles para este cluster'
-              : 'No hay sinergias disponibles'}
+            No hay sinergias disponibles.
           </p>
+          {rawResponse?._debug && (
+            <div className="inline-block text-left bg-zinc-900 border border-zinc-700 rounded-lg p-4 text-xs space-y-1">
+              <p className="text-zinc-500">Diagnóstico de tablas fuente:</p>
+              <p className="text-zinc-400">needs: <span className="text-white font-mono">{rawResponse._debug.needs_count}</span></p>
+              <p className="text-zinc-400">shutdowns: <span className="text-white font-mono">{rawResponse._debug.shutdowns_count}</span></p>
+              <p className="text-zinc-400">companies: <span className="text-white font-mono">{rawResponse._debug.companies_count}</span></p>
+              {rawResponse._debug.needs_count === 0 && rawResponse._debug.shutdowns_count === 0 && (
+                <p className="text-yellow-400 mt-2">Las tablas fuente están vacías. Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot;.</p>
+              )}
+              {(rawResponse._debug.needs_count > 0 || rawResponse._debug.shutdowns_count > 0) && (
+                <p className="text-yellow-400 mt-2">Hay datos fuente pero no se generaron sinergias. Ejecuta &quot;Refrescar Vistas&quot; desde Ingesta.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {rawResponse?._debug?.used_fallback && synergies.length > 0 && (
+        <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
+          <p className="text-yellow-300 text-sm">Mostrando todas las sinergias (el filtro original no devolvió resultados).</p>
         </div>
       )}
 
@@ -187,16 +208,16 @@ function SynergiesContent() {
                 {synergies.map((synergy) => (
                   <tr key={synergy.synergy_id} className="hover:bg-zinc-700/50 transition-colors">
                     <td className="px-4 py-3 text-sm text-white font-medium">
-                      {synergy.item_category}
+                      {synergy.item_category || <span className="text-zinc-600 italic">sin categoría</span>}
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-400 max-w-[200px]">
                       {formatCompanies(synergy.companies_involved_json)}
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-400">
-                      {formatDate(synergy.window_start)}
+                      {synergy.window_start ? formatDate(synergy.window_start) : '—'}
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-400">
-                      {formatDate(synergy.window_end)}
+                      {synergy.window_end ? formatDate(synergy.window_end) : '—'}
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-400">
                       {formatVolume(synergy.volume_total_json)}
@@ -238,6 +259,59 @@ function SynergiesContent() {
       {rfpSuccess && (
         <div className="mt-6 bg-green-900/20 border border-green-800 rounded-lg p-4">
           <p className="text-green-300">✓ RFP creado exitosamente. Redirigiendo...</p>
+        </div>
+      )}
+
+      {/* Panel de debug — muestra datos crudos de la API */}
+      {!loading && (
+        <div className="mt-8">
+          <button
+            onClick={() => setShowDebug(d => !d)}
+            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1"
+          >
+            <svg className={`w-3 h-3 transition-transform ${showDebug ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            Debug: Datos crudos de API
+          </button>
+
+          {showDebug && (
+            <div className="mt-2 bg-zinc-900 border border-zinc-700 rounded-lg p-4 overflow-auto max-h-[500px]">
+              {rawResponse?._debug && (
+                <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-zinc-800 rounded p-2">
+                    <span className="text-zinc-400">synergies:</span>{' '}
+                    <span className="text-white font-mono">{rawResponse._debug.synergies_count}</span>
+                  </div>
+                  <div className="bg-zinc-800 rounded p-2">
+                    <span className="text-zinc-400">needs:</span>{' '}
+                    <span className="text-white font-mono">{rawResponse._debug.needs_count}</span>
+                  </div>
+                  <div className="bg-zinc-800 rounded p-2">
+                    <span className="text-zinc-400">shutdowns:</span>{' '}
+                    <span className="text-white font-mono">{rawResponse._debug.shutdowns_count}</span>
+                  </div>
+                  <div className="bg-zinc-800 rounded p-2">
+                    <span className="text-zinc-400">companies:</span>{' '}
+                    <span className="text-white font-mono">{rawResponse._debug.companies_count}</span>
+                  </div>
+                  {rawResponse._debug.needs_error && (
+                    <div className="col-span-2 bg-red-900/20 border border-red-800 rounded p-2 text-red-400">
+                      needs error: {rawResponse._debug.needs_error}
+                    </div>
+                  )}
+                  {rawResponse._debug.shutdowns_error && (
+                    <div className="col-span-2 bg-red-900/20 border border-red-800 rounded p-2 text-red-400">
+                      shutdowns error: {rawResponse._debug.shutdowns_error}
+                    </div>
+                  )}
+                </div>
+              )}
+              <pre className="text-xs text-zinc-400 whitespace-pre-wrap font-mono">
+                {JSON.stringify(rawResponse, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -2,6 +2,11 @@ import { NextRequest } from 'next/server';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
 
+const KNOWN_COMPANY_IDS = [
+  'aaaa1111-1111-4111-a111-111111111111', // Reficar
+  '1b3a1393-b160-4d43-b0a5-8906a4e40077', // Demo / n8n
+];
+
 export interface GeoCompany {
   id: string;
   name: string;
@@ -112,6 +117,7 @@ export async function GET(request: NextRequest) {
     }
 
     // ── Estrategia 2: tabla companies directamente (sin filtro de status) ──
+    // Incluye ambos company_id conocidos (Reficar + Demo) por si n8n usó uno u otro
     if (result.length === 0) {
       const { data: companies, error: compErr } = await supabaseServer
         .from('companies')

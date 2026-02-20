@@ -785,7 +785,7 @@ export default function IntelligencePage() {
     ? (decisions.filter(d => d.decision === 'approved').length / decisions.length) * 100
     : 0;
 
-  // Filtrar datos por rango temporal
+  // Filtrar datos por rango temporal (conserva registros sin fecha)
   const getFilteredData = () => {
     const days = parseInt(timeRange);
     const cutoffDate = new Date();
@@ -793,11 +793,11 @@ export default function IntelligencePage() {
     
     return {
       synergies: synergies.filter(s => {
-        if (!s.created_at) return false;
+        if (!s.created_at) return true;
         return new Date(s.created_at) >= cutoffDate;
       }),
       rfps: rfps.filter(r => {
-        if (!r.created_at) return false;
+        if (!r.created_at) return true;
         return new Date(r.created_at) >= cutoffDate;
       }),
     };
