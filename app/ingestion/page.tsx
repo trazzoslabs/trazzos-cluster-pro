@@ -221,6 +221,12 @@ export default function IngestionPage() {
             console.warn('[refreshMarts] ⚠ mv_cluster_companies tiene 0 filas después del refresh');
           }
         }
+        // Señalizar a otras pestañas/páginas que el refresh terminó
+        try {
+          const bc = new BroadcastChannel('trazzos_marts');
+          bc.postMessage({ type: 'marts_refresh_completed', ts: Date.now(), counts });
+          bc.close();
+        } catch { /* BroadcastChannel no soportado */ }
       } else {
         console.warn('[refreshMarts] Status:', res.status);
       }
@@ -530,6 +536,8 @@ export default function IngestionPage() {
 
       const payload = {
         upload_id: ids.uploadId,
+        job_id: ids.jobId || jobId || undefined,
+        correlation_id: ids.correlationId || undefined,
         user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
       };

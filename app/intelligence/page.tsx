@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
@@ -461,7 +461,9 @@ export default function IntelligencePage() {
           ]);
           if (geoRes.ok) {
             const geoData = await geoRes.json();
-            setGeoCompanies(geoData.data || []);
+            const list = geoData.data || [];
+            console.log('[Intelligence] geo refresh:', list.length, 'empresas');
+            setGeoCompanies(list);
           }
           if (synRes.ok) {
             const synData = await synRes.json();
@@ -472,6 +474,7 @@ export default function IntelligencePage() {
         }
       };
 
+      refreshGeo(); // Fetch inmediato al entrar al modo geospatial
       geoIntervalRef.current = setInterval(refreshGeo, 30_000);
       return () => {
         if (geoIntervalRef.current) {
@@ -486,6 +489,34 @@ export default function IntelligencePage() {
       geoIntervalRef.current = null;
     }
   }, [activeMode]);
+
+  // Escuchar señal cross-page de marts_refresh_completed para recargar marcadores
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('trazzos_marts');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'marts_refresh_completed') {
+          console.log('[Intelligence] marts_refresh_completed recibido, refrescando geo…', event.data.counts);
+          (async () => {
+            try {
+              const res = await fetch('/api/data/companies-geo');
+              if (res.ok) {
+                const body = await res.json();
+                const list = body.data || [];
+                console.log('[Intelligence] Geo reload post-refresh:', list.length, 'empresas');
+                setGeoCompanies(list);
+              }
+            } catch { /* silenciar */ }
+          })();
+        }
+      };
+    } catch { /* BroadcastChannel no soportado */ }
+
+    return () => {
+      try { bc?.close(); } catch { /* noop */ }
+    };
+  }, []);
 
   const loadData = async () => {
     try {
@@ -504,6 +535,12 @@ export default function IntelligencePage() {
       const posData = await posRes.json();
       const decisionsData = await decisionsRes.json();
       const companiesGeoData = await companiesGeoRes.json();
+
+      console.log('[Intelligence] companies-geo response:', {
+        status: companiesGeoRes.status,
+        count: companiesGeoData.data?.length ?? 0,
+        sample: companiesGeoData.data?.slice(0, 2),
+      });
 
       setSynergies(synergiesData.data || []);
       setRfps(rfpsData.data || []);

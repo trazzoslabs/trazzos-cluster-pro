@@ -44,12 +44,14 @@ export default function GeoMap({
   const [mapLoaded, setMapLoaded] = useState(false);
 
   useEffect(() => {
+    console.log('[GeoMap] Montando mapa. companies recibidas:', companies.length, companies.map(c => c.name));
+
     if (!mapContainerRef.current) return;
 
     const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
     if (!mapboxToken) {
-      console.warn('Mapbox token not found. Using fallback view.');
+      console.warn('[GeoMap] Mapbox token no encontrado.');
       return;
     }
 
