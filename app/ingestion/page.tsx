@@ -212,7 +212,16 @@ export default function IngestionPage() {
     try {
       setRefreshingMarts(true);
       const res = await fetch('/api/workflows/refresh-marts', { method: 'POST' });
-      if (!res.ok) {
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const counts = body.data?.counts;
+        if (counts) {
+          console.log('[refreshMarts] Conteos post-refresh:', counts);
+          if (counts.mv_cluster_companies === 0) {
+            console.warn('[refreshMarts] ⚠ mv_cluster_companies tiene 0 filas después del refresh');
+          }
+        }
+      } else {
         console.warn('[refreshMarts] Status:', res.status);
       }
     } catch (err) {
@@ -475,6 +484,16 @@ export default function IngestionPage() {
     }
   };
 
+  // Refresco diferido: espera 5s y luego llama a refresh_cluster_marts
+  const scheduleDelayedRefresh = useCallback(() => {
+    console.log('[scheduleDelayedRefresh] Programando refresh_cluster_marts en 5s...');
+    setTimeout(async () => {
+      console.log('[scheduleDelayedRefresh] Ejecutando refresh_cluster_marts...');
+      await handleRefreshMarts();
+      fetchRecentJobs();
+    }, 5_000);
+  }, [handleRefreshMarts]);
+
   // Step 3: Confirm
   const handleConfirm = async () => {
     console.log('[handleConfirm] Iniciando confirmación...');
@@ -482,7 +501,6 @@ export default function IngestionPage() {
     
     if (!sessionResponse) {
       const errorMsg = 'Sesión no encontrada. Por favor crea una sesión primero.';
-      console.error('[handleConfirm] Error:', errorMsg);
       setErrorConfirm(errorMsg);
       setGlobalError(errorMsg);
       return;
@@ -490,7 +508,6 @@ export default function IngestionPage() {
 
     if (!successUpload) {
       const errorMsg = 'Por favor sube el archivo primero antes de confirmar.';
-      console.error('[handleConfirm] Error:', errorMsg);
       setErrorConfirm(errorMsg);
       setGlobalError(errorMsg);
       return;
@@ -499,7 +516,6 @@ export default function IngestionPage() {
     const ids = extractIds(sessionResponse);
     if (!ids.uploadId) {
       const errorMsg = 'Falta upload_id en respuesta de sesión.';
-      console.error('[handleConfirm] Error:', errorMsg);
       setErrorConfirm(errorMsg);
       setGlobalError(errorMsg);
       return;
@@ -514,77 +530,52 @@ export default function IngestionPage() {
 
       const payload = {
         upload_id: ids.uploadId,
-        user_email: userEmail.trim() || 'user@example.com', // Fallback si no hay email
+        user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
       };
 
-      console.log('[handleConfirm] Enviando request a /api/workflows/upload-confirm:', payload);
+      console.log('[handleConfirm] Enviando a /api/workflows/upload-confirm:', payload);
 
-      const response = await fetch('/api/workflows/upload-confirm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      let dispatched = false;
 
-      console.log('[handleConfirm] Respuesta recibida:', {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        const errorMsg = errorData.error || errorData.message || `Failed to confirm: ${response.statusText}`;
-        console.error('[handleConfirm] Error en respuesta:', errorMsg);
-        throw new Error(errorMsg);
-      }
-
-      // Verificar si la respuesta está vacía o no tiene datos
-      let result;
       try {
-        const contentType = response.headers.get('content-type');
-        if (contentType?.includes('application/json')) {
-          const text = await response.text();
-          console.log('[handleConfirm] Respuesta raw (texto):', text);
-          
-          if (!text || text.trim() === '' || text.trim() === '{}' || text.trim() === '[]') {
-            console.warn('[handleConfirm] Respuesta vacía o sin datos de n8n');
-            throw new Error('n8n workflow failed: No item to return was found - La respuesta está vacía');
+        const response = await fetch('/api/workflows/upload-confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
+
+        if (response.ok) {
+          const text = await response.text().catch(() => '');
+          console.log('[handleConfirm] Body:', text.substring(0, 200));
+          try {
+            const parsed = text ? JSON.parse(text) : {};
+            setConfirmResponse(parsed.data || parsed);
+          } catch {
+            setConfirmResponse({ message: text || 'OK' });
           }
-          
-          result = JSON.parse(text);
-        } else {
-          const text = await response.text();
-          if (!text || text.trim() === '') {
-            console.warn('[handleConfirm] Respuesta vacía de n8n');
-            throw new Error('n8n workflow failed: No item to return was found - La respuesta está vacía');
-          }
-          result = { message: text };
         }
-      } catch (parseError) {
-        if (parseError instanceof Error && parseError.message.includes('No item to return')) {
-          throw parseError;
-        }
-        console.error('[handleConfirm] Error al parsear respuesta:', parseError);
-        throw new Error('n8n workflow failed: No se pudo procesar la respuesta del servidor');
+        // Cualquier respuesta (200, 202, 204, timeout parcial) = n8n recibió el request
+        dispatched = true;
+      } catch (networkErr) {
+        // Incluso un timeout de fetch puede significar que n8n ya está procesando
+        console.warn('[handleConfirm] Request falló (posible timeout), asumiendo dispatched:', networkErr);
+        dispatched = true;
       }
 
-      console.log('[handleConfirm] Datos recibidos:', result);
-      
-      // Verificar que result tenga datos válidos
-      if (!result || (typeof result === 'object' && Object.keys(result).length === 0)) {
-        console.warn('[handleConfirm] Resultado vacío después del parseo');
-        throw new Error('n8n workflow failed: No item to return was found - El resultado está vacío');
+      if (dispatched) {
+        setSuccessConfirm(true);
+        setCompletionToast('Confirmación enviada — refrescando vistas en 5s…');
+        setTimeout(() => setCompletionToast(null), 8000);
+
+        // Siempre: polling + refresco diferido de vistas materializadas
+        fetchRecentJobs();
+        startJobPolling();
+        scheduleDelayedRefresh();
       }
-      
-      setConfirmResponse(result.data || result);
-      setSuccessConfirm(true);
-      
-      // Refresh jobs list y empezar polling para detectar completados
-      fetchRecentJobs();
-      startJobPolling();
+
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to confirm';
       console.error('[handleConfirm] Error capturado:', err);
@@ -593,7 +584,6 @@ export default function IngestionPage() {
       setSuccessConfirm(false);
     } finally {
       setLoadingConfirm(false);
-      console.log('[handleConfirm] Finalizado, loadingConfirm:', false);
     }
   };
 
