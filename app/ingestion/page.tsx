@@ -26,6 +26,10 @@ export default function IngestionPage() {
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
 
+  // User profile loading state
+  const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
   // Step 1 - Session
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
@@ -50,9 +54,40 @@ export default function IngestionPage() {
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
 
+  // Load user profile on mount
   useEffect(() => {
+    fetchUserProfile();
     fetchRecentJobs();
   }, []);
+
+  const fetchUserProfile = async () => {
+    try {
+      setLoadingProfile(true);
+      setProfileError(null);
+
+      const response = await fetch('/api/auth/profile');
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(errorData.error || `Failed to fetch profile: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      const profile = result.data;
+
+      if (profile) {
+        setUserId(profile.user_id || '');
+        setCompanyId(profile.company_id || '');
+        setUserEmail(profile.email || '');
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load user profile';
+      setProfileError(errorMessage);
+      console.error('Error fetching user profile:', err);
+    } finally {
+      setLoadingProfile(false);
+    }
+  };
 
   const fetchRecentJobs = async () => {
     try {
@@ -117,13 +152,14 @@ export default function IngestionPage() {
       return;
     }
 
+    // Validar que tenemos los datos del perfil cargados
     if (!companyId.trim()) {
-      setErrorSession('Company ID es requerido');
+      setErrorSession('Company ID no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
       return;
     }
 
     if (!userId.trim()) {
-      setErrorSession('User ID es requerido');
+      setErrorSession('User ID no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
       return;
     }
 
@@ -236,7 +272,7 @@ export default function IngestionPage() {
     }
 
     if (!userEmail.trim()) {
-      setErrorConfirm('User Email es requerido');
+      setErrorConfirm('User Email no disponible. Por favor espera a que se cargue tu perfil o recarga la página.');
       return;
     }
 
@@ -342,10 +378,14 @@ export default function IngestionPage() {
             <input
               type="text"
               value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-              placeholder="uuid"
-              className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
+              disabled
+              readOnly
+              placeholder={loadingProfile ? 'Cargando...' : 'uuid'}
+              className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
+            {companyId && (
+              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu perfil</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -354,10 +394,14 @@ export default function IngestionPage() {
             <input
               type="text"
               value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="uuid"
-              className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
+              disabled
+              readOnly
+              placeholder={loadingProfile ? 'Cargando...' : 'uuid'}
+              className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
+            {userId && (
+              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu sesión</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -366,12 +410,24 @@ export default function IngestionPage() {
             <input
               type="email"
               value={userEmail}
-              onChange={(e) => setUserEmail(e.target.value)}
-              placeholder="user@example.com"
-              className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
+              disabled
+              readOnly
+              placeholder={loadingProfile ? 'Cargando...' : 'user@example.com'}
+              className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
+            {userEmail && (
+              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu perfil</p>
+            )}
           </div>
         </div>
+
+        {profileError && (
+          <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
+            <p className="text-yellow-300 text-sm">
+              ⚠️ Advertencia: {profileError}. Los campos se llenarán automáticamente cuando se resuelva.
+            </p>
+          </div>
+        )}
 
         {errorSession && (
           <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 mb-4">
@@ -388,10 +444,10 @@ export default function IngestionPage() {
         <div className="flex gap-4">
           <button
             onClick={handleCreateSession}
-            disabled={loadingSession || !file || !companyId.trim() || !userId.trim()}
+            disabled={loadingSession || loadingProfile || !file || !companyId.trim() || !userId.trim()}
             className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
           >
-            {loadingSession ? 'Iniciando...' : 'Iniciar carga'}
+            {loadingProfile ? 'Cargando perfil...' : loadingSession ? 'Iniciando...' : 'Iniciar carga'}
           </button>
 
           {successSession && (

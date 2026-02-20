@@ -61,3 +61,4 @@ export function parseWalletError(error: unknown): WalletError {
   };
 }
 
+
