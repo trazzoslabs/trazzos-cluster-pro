@@ -4,15 +4,17 @@ import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { parseWalletError } from '@/components/auth/parseWalletError';
 import Toast from '@/components/auth/Toast';
+import { supabaseClient } from '@/lib/supabaseClient';
 
 function LoginPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   
   // Estados de autenticación
-  const [activeTab, setActiveTab] = useState<'wallet' | 'google' | 'email'>('wallet');
+  const [activeTab, setActiveTab] = useState<'wallet' | 'google' | 'email'>('email');
   const [connecting, setConnecting] = useState(false);
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [hasWallet, setHasWallet] = useState<boolean | null>(null);
   
@@ -129,23 +131,57 @@ function LoginPageContent() {
       return;
     }
 
+    if (!password || password.length < 6) {
+      showToast('La contraseña debe tener al menos 6 caracteres', 'error');
+      return;
+    }
+
     try {
       setConnecting(true);
-      const response = await fetch('/api/auth/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+      setToast(null);
+
+      // Autenticar con Supabase usando email y contraseña
+      const { data, error } = await supabaseClient.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
       });
 
-      if (response.ok) {
-        setIsAuthenticated(true);
-        const next = searchParams.get('next') || '/';
-        router.push(next);
-      } else {
-        throw new Error('Error al autenticar con email');
+      if (error) {
+        throw error;
       }
-    } catch (err) {
-      showToast('Error al autenticar con email. Por favor intenta de nuevo.', 'error');
+
+      if (data?.user && data?.session) {
+        // Establecer cookies para compatibilidad con el middleware
+        const response = await fetch('/api/auth/set-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: data.user.email,
+            user_id: data.user.id,
+          }),
+        });
+
+        if (!response.ok) {
+          console.warn('Failed to set session cookies, but auth was successful');
+        }
+
+        setIsAuthenticated(true);
+        // Redirigir a /ingestion como se solicitó
+        router.push('/ingestion');
+      } else {
+        throw new Error('No se recibió sesión del servidor');
+      }
+    } catch (err: any) {
+      const errorMessage = err?.message || 'Error al autenticar con email y contraseña';
+      
+      // Mensajes de error más específicos
+      if (errorMessage.includes('Invalid login credentials') || errorMessage.includes('Invalid credentials')) {
+        showToast('Email o contraseña incorrectos', 'error');
+      } else if (errorMessage.includes('Email not confirmed')) {
+        showToast('Por favor confirma tu email antes de iniciar sesión', 'error');
+      } else {
+        showToast(errorMessage, 'error');
+      }
     } finally {
       setConnecting(false);
     }
@@ -427,18 +463,33 @@ function LoginPageContent() {
                       <div>
                         <h3 className="text-base font-semibold text-white mb-1.5">Acceso por email</h3>
                         <p className="text-xs text-zinc-400 leading-relaxed">
-                          Ingresa tu email para acceder al sistema.
+                          Ingresa tu email y contraseña para acceder al sistema.
                         </p>
                       </div>
                       <form onSubmit={handleEmailSubmit} className="space-y-4">
-                        <input
-                          type="email"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          placeholder="tu@email.com"
-                          className="w-full px-4 py-2.5 bg-zinc-800/50 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#9aff8d]/50 focus:border-[#9aff8d]/50 transition-all"
-                          required
-                        />
+                        <div>
+                          <input
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="tu@email.com"
+                            className="w-full px-4 py-2.5 bg-zinc-800/50 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#9aff8d]/50 focus:border-[#9aff8d]/50 transition-all"
+                            required
+                            autoComplete="email"
+                          />
+                        </div>
+                        <div>
+                          <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Contraseña"
+                            className="w-full px-4 py-2.5 bg-zinc-800/50 border border-zinc-700/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#9aff8d]/50 focus:border-[#9aff8d]/50 transition-all"
+                            required
+                            autoComplete="current-password"
+                            minLength={6}
+                          />
+                        </div>
                         <button
                           type="submit"
                           disabled={connecting}
@@ -450,10 +501,10 @@ function LoginPageContent() {
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                               </svg>
-                              Conectando...
+                              Iniciando sesión...
                             </>
                           ) : (
-                            'Continuar con email'
+                            'Iniciar sesión'
                           )}
                         </button>
                       </form>
