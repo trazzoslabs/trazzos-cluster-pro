@@ -424,7 +424,7 @@ export default function IngestionPage() {
   }, [handleRefreshMarts]);
 
   // Step 1: Create session
-  const handleCreateSession = async (preparedUpload?: PreparedUpload) => {
+  const handleCreateSession = async (preparedUpload?: PreparedUpload, forcedJobId?: string) => {
     console.log('[handleCreateSession] Iniciando creación de sesión...');
     setGlobalError(null);
     
@@ -471,7 +471,7 @@ export default function IngestionPage() {
       const uploadBlob = preparedUpload?.body || file;
       const uploadFileName = preparedUpload?.fileName || file.name;
       const uploadContentType = preparedUpload?.contentType || file.type || 'application/octet-stream';
-      const generatedJobId = createClientJobId();
+      const generatedJobId = forcedJobId || createClientJobId();
 
       const formData = new FormData();
       formData.append('file', uploadBlob, uploadFileName);
@@ -850,45 +850,83 @@ export default function IngestionPage() {
         return;
       }
 
-      const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
-      
-      if (!currentUploadId) {
-        let preparedUpload: PreparedUpload;
-        try {
-          preparedUpload = await buildPreparedUpload(file);
-        } catch (prepErr) {
-          const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
-          console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
-          setGlobalError(`Error preparando archivo: ${msg}`);
-          return;
-        }
+      // Orden estricto solicitado:
+      // 1) Generar job_id local al inicio
+      // 2) Notificar "Procesando archivo..."
+      // 3) Disparar F1 y F2 en paralelo (fire & forget)
+      const localJobId = createClientJobId();
+      persistTrackingIds({ jobId: localJobId });
+      setJobId(localJobId);
+      setCompletionToast('Procesando archivo...');
+      console.log('[handleUpload] job_id local generado:', localJobId);
 
-        // Paso 1: Crear sesión
-        const sessionResult = await handleCreateSession(preparedUpload);
-        
-        if (!sessionResult?.signedUrl) {
-          console.error('[handleUpload] No se obtuvo signedUrl de la sesión');
-          return;
-        }
-
-        // Paso 2: Subir archivo pasando la URL directamente (evita esperar re-render)
-        const uploadSuccess = await handleUploadFile(sessionResult.signedUrl, preparedUpload);
-        if (!uploadSuccess) {
-          return;
-        }
-
-        // Paso 3 (automático): Confirmar inmediatamente para disparar V6
-        alert('Iniciando Fase 2');
-        console.log('[handleUpload] Upload exitoso; disparando automáticamente /api/workflows/upload-confirm para activar V6');
-        await handleConfirm();
-      } else if (currentUploadId && !isConfirmed && successUpload) {
-        // Paso 3: Confirmar (solo si el archivo ya se subió)
-        alert('Iniciando Fase 2');
-        await handleConfirm();
+      let preparedUpload: PreparedUpload;
+      try {
+        preparedUpload = await buildPreparedUpload(file);
+      } catch (prepErr) {
+        const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
+        console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
+        window.alert(`Error técnico: ${msg}`);
+        setGlobalError(`Error preparando archivo: ${msg}`);
+        return;
       }
+
+      // Fase 1 - fire & forget (crear sesión + subida a signed URL si aplica)
+      void (async () => {
+        try {
+          const sessionResult = await handleCreateSession(preparedUpload, localJobId);
+          if (sessionResult?.signedUrl) {
+            await handleUploadFile(sessionResult.signedUrl, preparedUpload);
+          } else {
+            console.warn('[handleUpload] Fase 1 sin signedUrl; se continúa con Fase 2 por modo emergencia');
+          }
+        } catch (err) {
+          console.error('[handleUpload] Error en Fase 1 (fire & forget):', err);
+          window.alert(`Error técnico Fase 1: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+
+      // Fase 2 - fire & forget inmediata, sin esperar Fase 1
+      alert('Iniciando Fase 2');
+      void (async () => {
+        try {
+          const confirmPayload = {
+            job_id: localJobId,
+            cluster_id: FIXED_CLUSTER_ID,
+            user_email: userEmail.trim() || 'user@example.com',
+            app_url: appUrl.trim() || undefined,
+          };
+
+          if (!confirmPayload.job_id) throw new Error('ERROR CRÍTICO: job_id undefined');
+
+          console.log('[handleUpload][Fase2] Payload exacto:', confirmPayload);
+          const res = await fetch('/api/workflows/upload-confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(confirmPayload),
+          });
+          const text = await res.text().catch(() => '');
+          console.log('[handleUpload][Fase2] Respuesta:', res.status, res.statusText, text);
+
+          if (!res.ok) {
+            throw new Error(`Fase 2 falló (${res.status}): ${text || res.statusText}`);
+          }
+
+          setSuccessConfirm(true);
+          setCompletionToast('Fase 2 iniciada correctamente');
+          fetchRecentJobs();
+          startJobPolling();
+          scheduleDelayedRefresh();
+        } catch (err) {
+          console.error('[handleUpload] Error en Fase 2 (fire & forget):', err);
+          window.alert(`Error técnico Fase 2: ${err instanceof Error ? err.message : String(err)}`);
+          setGlobalError(err instanceof Error ? err.message : 'Error inesperado en Fase 2');
+        }
+      })();
     } catch (err) {
       console.error('[handleUpload] ERROR GLOBAL:', err);
       const errorMsg = err instanceof Error ? err.message : 'Error inesperado en la carga';
+      window.alert(`Error técnico: ${errorMsg}`);
       setGlobalError(errorMsg);
     }
   };
