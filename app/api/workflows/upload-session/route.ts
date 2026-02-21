@@ -1,10 +1,12 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const SESSION_TIMEOUT_MS = 60_000;
+const ALLOWED_DATASET_TYPES = new Set(['shutdowns', 'needs', 'suppliers']);
 
 const safeLog = (...args: any[]) => {
   try { console.log(...args); } catch { /* no-op */ }
@@ -22,7 +24,6 @@ export async function POST(request: NextRequest) {
 
     const contentType = request.headers.get('content-type') || '';
     const isMultipart = contentType.includes('multipart/form-data');
-    const generatedJobId = crypto.randomUUID();
     if (!isMultipart) {
       return createErrorResponse('Use multipart/form-data con el archivo', 400);
     }
@@ -33,39 +34,46 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Archivo requerido en campo "file"', 400);
     }
 
-    const fileName = String(form.get('file_name') || inboundFile.name || '').toLowerCase();
-    const datasetTypeFromFile = fileName.endsWith('.csv') || fileName.endsWith('.xlsx') ? 'suppliers' : 'needs';
-    const datasetType = String(form.get('dataset_type') || datasetTypeFromFile);
+    const companyId = String(form.get('company_id') || '').trim();
+    const userId = String(form.get('user_id') || '').trim();
+    const fileName = String(form.get('file_name') || inboundFile.name || '').trim();
+    const fileType = String(form.get('file_type') || inboundFile.type || 'application/octet-stream').trim();
+    const datasetType = String(form.get('dataset_type') || '').trim().toLowerCase();
+
+    if (!companyId || !userId || !fileName || !fileType || !datasetType) {
+      return createErrorResponse('company_id, user_id, file_name, file_type y dataset_type son requeridos', 400);
+    }
+    if (!ALLOWED_DATASET_TYPES.has(datasetType)) {
+      return createErrorResponse("dataset_type inválido. Usa 'shutdowns', 'needs' o 'suppliers'", 400);
+    }
+
+    const generatedJobId = crypto.randomUUID();
+    const generatedCorrelationId = crypto.randomUUID();
 
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
-    const n8nUrl = `${webhookBaseUrl}?job_id=${generatedJobId}&id=${generatedJobId}`;
+    const payload = {
+      company_id: companyId,
+      file_name: fileName,
+      file_type: fileType,
+      user_id: userId,
+      dataset_type: datasetType,
+      job_id: generatedJobId,
+      correlation_id: generatedCorrelationId,
+    };
 
-    const outboundForm = new FormData();
-    outboundForm.append('file', inboundFile, inboundFile.name);
-    outboundForm.append('job_id', generatedJobId);
-    outboundForm.append('id', generatedJobId);
-    outboundForm.append('correlation_id', generatedJobId);
-    outboundForm.append('external_id', generatedJobId);
-    outboundForm.append('company_id', String(form.get('company_id') || ''));
-    outboundForm.append('user_id', String(form.get('user_id') || ''));
-    outboundForm.append('cluster_id', String(form.get('cluster_id') || ''));
-    outboundForm.append('dataset_type', datasetType);
-    outboundForm.append('file_name', String(form.get('file_name') || inboundFile.name));
-    outboundForm.append('file_type', String(form.get('file_type') || inboundFile.type || 'application/octet-stream'));
-
-    const headers: HeadersInit = {};
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     if (N8N_WEBHOOK_TOKEN && !N8N_WEBHOOK_TOKEN.startsWith('http')) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    safeLog('[upload-session] → POST multipart a n8n: %s', n8nUrl);
+    safeLog('[upload-session] → POST %s  job_id=%s correlation_id=%s', webhookBaseUrl, generatedJobId, generatedCorrelationId);
 
     let response: Response;
     try {
-      response = await fetchWithTimeout(n8nUrl, {
+      response = await fetchWithTimeout(webhookBaseUrl, {
         method: 'POST',
         headers,
-        body: outboundForm,
+        body: JSON.stringify(payload),
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {
@@ -80,10 +88,10 @@ export async function POST(request: NextRequest) {
       return createErrorResponse(`Conexión con n8n fallida: ${msg}`, 502);
     }
 
-    let data;
+    let data: any;
     try {
-      const contentType = response.headers.get('content-type');
-      if (contentType?.includes('application/json')) {
+      const n8nResponseType = response.headers.get('content-type');
+      if (n8nResponseType?.includes('application/json')) {
         data = await response.json();
       } else {
         const text = await response.text();
@@ -100,16 +108,47 @@ export async function POST(request: NextRequest) {
       return createErrorResponse(
         'Workflow de n8n falló. Revisa el historial de ejecuciones en n8n cloud.',
         response.status,
+        generatedCorrelationId,
       );
+    }
+
+    const signedUrl =
+      data?.signed_url ||
+      data?.signedUrl ||
+      data?.upload_url ||
+      data?.url ||
+      data?.data?.signed_url ||
+      data?.data?.signedUrl ||
+      data?.data?.upload_url ||
+      data?.data?.url;
+
+    if (!signedUrl) {
+      safeError('[upload-session] n8n respondió sin signed_url:', data);
+      return createErrorResponse('n8n no devolvió signed_url', 502, generatedCorrelationId);
+    }
+
+    const { error: insertErr } = await supabaseServer
+      .from('ingestion_jobs')
+      .insert({
+        job_id: generatedJobId,
+        status: 'running',
+        correlation_id: generatedCorrelationId,
+      });
+
+    if (insertErr) {
+      safeError('[upload-session] Error insertando ingestion_jobs:', insertErr);
+      return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500, generatedCorrelationId);
     }
 
     safeLog('[upload-session] ← %d OK', response.status);
     return createSuccessResponse(
       {
         job_id: generatedJobId,
-        message: 'Archivo recibido, procesando sinergias...',
+        correlation_id: generatedCorrelationId,
+        signed_url: signedUrl,
       },
       200,
+      generatedCorrelationId,
     );
   } catch (error) {
     safeError('Unexpected error in POST /api/workflows/upload-session:', error);

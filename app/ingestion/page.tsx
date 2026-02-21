@@ -23,6 +23,8 @@ interface PreparedUpload {
   originalName: string;
   wasJsonConverted: boolean;
 }
+type DatasetType = 'shutdowns' | 'needs' | 'suppliers';
+type UploadPhase = 'idle' | 'validating' | 'uploading' | 'processing';
 
 export default function IngestionPage() {
   // IDs fijos según requerimiento
@@ -36,17 +38,16 @@ export default function IngestionPage() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
+  const [datasetType, setDatasetType] = useState<DatasetType>('needs');
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
 
-  /** n8n only accepts "needs" or "suppliers". Auto-detect from file extension. */
-  const inferDatasetType = (f: File | null): 'needs' | 'suppliers' => {
+  const inferDatasetType = (f: File | null): DatasetType => {
     if (!f) return 'needs';
-    // Regla explícita para pruebas de seed solicitadas por negocio.
-    if (f.name.toLowerCase() === 'data_prueba_limpia.json') return 'needs';
     const ext = f.name.split('.').pop()?.toLowerCase();
     if (ext === 'csv' || ext === 'xlsx') return 'suppliers';
-    return 'needs'; // .json, .jsonl → needs
+    return 'needs';
   };
-  
+
   // Error global para mostrar en alerta roja
   const [globalError, setGlobalError] = useState<string | null>(null);
 
@@ -172,7 +173,13 @@ export default function IngestionPage() {
     };
   };
 
-  const buttonText = loadingSession ? 'Subiendo...' : 'Subir archivo';
+  const phaseLabel: Record<UploadPhase, string> = {
+    idle: '',
+    validating: 'Validando archivo',
+    uploading: 'Subiendo a la nube',
+    processing: 'Procesando sinergias',
+  };
+  const buttonText = loadingSession ? (phaseLabel[uploadPhase] || 'Subiendo...') : 'Subir archivo';
 
   // Recent Jobs
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
@@ -821,8 +828,11 @@ export default function IngestionPage() {
     setGlobalError(null);
     setErrorSession(null);
     setSuccessSession(false);
+    setUploadPhase('idle');
 
     try {
+      setLoadingSession(true);
+      setUploadPhase('validating');
       if (!file) throw new Error('Por favor selecciona un archivo');
 
       const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
@@ -831,32 +841,69 @@ export default function IngestionPage() {
         throw new Error(`Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`);
       }
 
-      setLoadingSession(true);
-      const localJobId = createClientJobId();
+      // Fase 1 (Session): pedir signed_url + IDs al proxy
       const formData = new FormData();
       formData.append('file', file, file.name);
       formData.append('company_id', FIXED_COMPANY_ID);
       formData.append('user_id', FIXED_USER_ID);
-      formData.append('job_id', localJobId);
       formData.append('file_name', file.name);
       formData.append('file_type', file.type || 'application/octet-stream');
-      formData.append('dataset_type', inferDatasetType(file));
+      formData.append('dataset_type', datasetType);
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
-      const response = await fetch('/api/workflows/upload-session', {
+      const sessionResponse = await fetch('/api/workflows/upload-session', {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody.error || errBody.message || `Error ${response.status}`);
+      if (!sessionResponse.ok) {
+        const errBody = await sessionResponse.json().catch(() => ({}));
+        throw new Error(errBody.error || errBody.message || `Error ${sessionResponse.status}`);
       }
 
-      const result = await response.json().catch(() => ({}));
-      const receivedJobId = result?.data?.job_id || localJobId;
+      const sessionResult = await sessionResponse.json().catch(() => ({}));
+      const responseData = sessionResult?.data || {};
+      const receivedJobId = responseData?.job_id;
+      const correlationId = responseData?.correlation_id || sessionResult?.correlation_id;
+      const signedUrlFromSession = responseData?.signed_url;
+      if (!receivedJobId || !correlationId || !signedUrlFromSession) {
+        throw new Error('La sesión no devolvió job_id, correlation_id o signed_url');
+      }
+
+      // Fase 2 (Upload): subir archivo a signed_url de storage
+      setUploadPhase('uploading');
+      const uploadResponse = await fetch(String(signedUrlFromSession), {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!uploadResponse.ok) {
+        const uploadBody = await uploadResponse.text().catch(() => '');
+        throw new Error(uploadBody || `Error subiendo archivo (${uploadResponse.status})`);
+      }
+
+      // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso
+      setUploadPhase('processing');
+      const confirmResponse = await fetch('/api/workflows/upload-confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id: String(receivedJobId),
+          correlation_id: String(correlationId),
+        }),
+      });
+
+      if (!confirmResponse.ok) {
+        const errBody = await confirmResponse.json().catch(() => ({}));
+        throw new Error(errBody.error || errBody.message || `Error ${confirmResponse.status}`);
+      }
+
       setJobId(receivedJobId);
-      setSessionResponse({ job_id: receivedJobId });
+      setSessionResponse({
+        job_id: receivedJobId,
+        correlation_id: correlationId,
+        signed_url: signedUrlFromSession,
+      });
       setSuccessSession(true);
       setFile(null);
       persistTrackingIds({ jobId: receivedJobId });
@@ -864,6 +911,7 @@ export default function IngestionPage() {
     } catch (err) {
       console.log('[upload] error:', err);
       setGlobalError(err instanceof Error ? err.message : 'Error al subir archivo');
+      setUploadPhase('idle');
     } finally {
       setLoadingSession(false);
     }
@@ -901,13 +949,16 @@ export default function IngestionPage() {
             <label className="block text-sm font-medium text-zinc-400 mb-2">
               Tipo de Dataset
             </label>
-            <div className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-300 flex items-center gap-2">
-              <span className="font-mono text-sm">{inferDatasetType(file)}</span>
-              <span className="text-zinc-500 text-xs">
-                ({file ? (inferDatasetType(file) === 'needs' ? 'JSON / JSONL' : 'CSV / XLSX') : 'selecciona un archivo'})
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-zinc-500">Detectado automáticamente según la extensión del archivo</p>
+            <select
+              value={datasetType}
+              onChange={(e) => setDatasetType(e.target.value as DatasetType)}
+              className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
+            >
+              <option value="shutdowns">shutdowns</option>
+              <option value="needs">needs</option>
+              <option value="suppliers">suppliers</option>
+            </select>
+            <p className="mt-1 text-xs text-zinc-500">Selecciona el dataset antes de iniciar la carga</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -1009,6 +1060,9 @@ export default function IngestionPage() {
         )}
 
         <form onSubmit={handleUpload} className="space-y-4">
+          {uploadPhase !== 'idle' && (
+            <p className="text-sm text-zinc-300">{phaseLabel[uploadPhase]}</p>
+          )}
           <button
             type="submit"
             disabled={loadingSession || !file}
