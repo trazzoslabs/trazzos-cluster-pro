@@ -7,7 +7,7 @@ const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
-const SESSION_TIMEOUT_MS = 5_000;
+const SESSION_TIMEOUT_MS = 60_000;
 
 const safeLog = (...args: any[]) => {
   try { console.log(...args); } catch { /* no-op */ }
@@ -155,8 +155,9 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       safeError('[upload-session] n8n error %d:', response.status, data);
+      console.error('[upload-session] Cuerpo completo de error n8n:', typeof data === 'string' ? data : JSON.stringify(data));
       return createErrorResponse(
-        `n8n workflow failed: ${data.error || data.message || response.statusText}`,
+        'Workflow de n8n falló. Revisa el historial de ejecuciones en n8n cloud.',
         response.status,
       );
     }
