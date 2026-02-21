@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
@@ -50,14 +51,15 @@ export async function POST(request: NextRequest) {
     const fileName = String(body?.file_name ?? '').toLowerCase();
     const isJsonUpload = fileName.endsWith('.json') || fileName.endsWith('.jsonl');
     const isCsvUpload = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
+    const generatedJobId = crypto.randomUUID();
 
     // Normalize payload before forwarding to n8n
     const payload: Record<string, any> = {
       ...(body as Record<string, any>),
+      job_id: generatedJobId,
       cluster_id: FIXED_CLUSTER_ID,
       dataset_type: isJsonUpload ? 'needs' : isCsvUpload ? 'suppliers' : body?.dataset_type,
     };
-    payload.job_id = payload.job_id || crypto.randomUUID();
 
     // Validate required fields that n8n needs for the hash
     if (!payload.company_id || String(payload.company_id).trim().length === 0) {
@@ -73,10 +75,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const correlationId = payload?.correlation_id;
+    // Registro silencioso previo en DB para asegurar trazabilidad del job
+    const { error: insertErr } = await supabaseServer
+      .from('ingestion_jobs')
+      .insert({ job_id: generatedJobId, status: 'running' });
+
+    if (insertErr) {
+      safeError('[upload-session] Error insertando ingestion_jobs:', insertErr);
+      return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500);
+    }
+
     const url = `${N8N_WEBHOOK_BASE}/api/upload/session`;
 
-    const headers: HeadersInit = {};
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     if (N8N_WEBHOOK_TOKEN && !N8N_WEBHOOK_TOKEN.startsWith('http')) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
@@ -87,25 +98,22 @@ export async function POST(request: NextRequest) {
       safeLog('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
     }
 
-    const outboundForm = new FormData();
-    outboundForm.append('company_id', String(payload.company_id));
-    outboundForm.append('user_id', String(payload.user_id ?? ''));
-    outboundForm.append('job_id', String(payload.job_id));
-    outboundForm.append('file_name', String(payload.file_name ?? inboundFile?.name ?? 'data.csv'));
-    outboundForm.append('file_type', String(payload.file_type ?? inboundFile?.type ?? 'text/csv'));
-    outboundForm.append('dataset_type', String(payload.dataset_type));
-    outboundForm.append('cluster_id', String(payload.cluster_id));
-    if (payload.correlation_id) outboundForm.append('correlation_id', String(payload.correlation_id));
-    if (inboundFile) {
-      outboundForm.append('file', inboundFile, inboundFile.name);
-    }
+    const outboundPayload = {
+      company_id: String(payload.company_id),
+      user_id: String(payload.user_id ?? ''),
+      job_id: String(payload.job_id),
+      file_name: String(payload.file_name ?? inboundFile?.name ?? 'data.csv'),
+      file_type: String(payload.file_type ?? inboundFile?.type ?? 'text/csv'),
+      dataset_type: String(payload.dataset_type),
+      cluster_id: String(payload.cluster_id),
+    };
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
         headers,
-        body: outboundForm,
+        body: JSON.stringify(outboundPayload),
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {
@@ -139,7 +147,6 @@ export async function POST(request: NextRequest) {
       return createErrorResponse(
         `n8n workflow failed: ${data.error || data.message || response.statusText}`,
         response.status,
-        correlationId,
       );
     }
 
@@ -148,7 +155,7 @@ export async function POST(request: NextRequest) {
       ...(typeof data === 'object' && data !== null ? data : { message: data }),
       job_id: (data as any)?.job_id || payload.job_id,
     };
-    return createSuccessResponse(responseData, response.status, correlationId);
+    return createSuccessResponse(responseData, response.status);
   } catch (error) {
     safeError('Unexpected error in POST /api/workflows/upload-session:', error);
     return createErrorResponse('Internal server error', 500);

@@ -539,6 +539,9 @@ export default function IngestionPage() {
       
       setSessionResponse(dataWithGuaranteedJobId);
       setSuccessSession(true);
+      setCompletionToast('Procesamiento iniciado');
+      setTimeout(() => setCompletionToast(null), 5000);
+      setFile(null);
       
       const ids = extractIds(dataWithGuaranteedJobId);
       if (ids.jobId) {
@@ -577,7 +580,7 @@ export default function IngestionPage() {
 
     const targetUrl = urlOverride || signedUrl;
     
-    if (!file) {
+    if (!file && !preparedUpload) {
       const errorMsg = 'Archivo es requerido';
       console.error('[handleUploadFile] Error:', errorMsg);
       setErrorUpload(errorMsg);
@@ -593,14 +596,22 @@ export default function IngestionPage() {
       return false;
     }
 
-    const bodyToUpload = preparedUpload?.body || file;
-    const contentTypeToUpload = preparedUpload?.contentType || file.type || 'application/octet-stream';
-    const uploadName = preparedUpload?.fileName || file.name;
+    const fallbackFile = file ?? undefined;
+    const bodyToUpload = preparedUpload?.body ?? fallbackFile;
+    const contentTypeToUpload = preparedUpload?.contentType ?? fallbackFile?.type ?? 'application/octet-stream';
+    const uploadName = preparedUpload?.fileName ?? fallbackFile?.name ?? 'data.csv';
+    if (!bodyToUpload) {
+      const errorMsg = 'No hay contenido para subir';
+      console.error('[handleUploadFile] Error:', errorMsg);
+      setErrorUpload(errorMsg);
+      setGlobalError(errorMsg);
+      return false;
+    }
     const uploadSize = bodyToUpload.size;
 
     console.log('[handleUploadFile] Subiendo archivo:', {
       name: uploadName,
-      original_name: preparedUpload?.originalName || file.name,
+      original_name: preparedUpload?.originalName ?? fallbackFile?.name ?? uploadName,
       size: uploadSize,
       type: contentTypeToUpload,
       converted_from_json: Boolean(preparedUpload?.wasJsonConverted),
