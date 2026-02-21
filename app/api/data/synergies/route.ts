@@ -50,36 +50,49 @@ async function buildCompanyLookup(): Promise<Map<string, string>> {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Resolve companies_involved_json entries from UUIDs/codes to human-readable names.
+ * Resolve companies_involved_json entries to a flat array of human-readable
+ * name strings.  UUIDs that can't be resolved are dropped so the UI never
+ * shows raw codes.
  */
-function resolveCompanyNames(involved: any, lookup: Map<string, string>): any {
-  if (!involved || lookup.size === 0) return involved;
+function resolveCompanyNames(involved: any, lookup: Map<string, string>): string[] {
+  if (!involved) return [];
 
-  if (Array.isArray(involved)) {
-    return involved.map((entry: any) => {
-      if (typeof entry === 'string') {
-        return lookup.get(entry) ?? lookup.get(entry.toLowerCase()) ?? entry;
-      }
-      if (typeof entry === 'object' && entry !== null) {
-        const id = entry.company_id ?? entry.id;
-        const name = entry.name ?? entry.company_name;
-        if (name) return { ...entry, name };
-        if (id && lookup.has(id)) return { ...entry, name: lookup.get(id) };
-        return entry;
-      }
-      return entry;
-    });
-  }
+  // Normalise input to an array
+  let entries: any[] = [];
 
   if (typeof involved === 'string') {
-    if (UUID_RE.test(involved)) return lookup.get(involved) ?? involved;
-    try {
-      const parsed = JSON.parse(involved);
-      return resolveCompanyNames(parsed, lookup);
-    } catch { /* not JSON */ }
+    if (UUID_RE.test(involved)) {
+      const name = lookup.get(involved);
+      return name ? [name] : [];
+    }
+    try { entries = JSON.parse(involved); } catch { return [involved]; }
+    if (!Array.isArray(entries)) entries = [entries];
+  } else if (Array.isArray(involved)) {
+    entries = involved;
+  } else {
+    entries = [involved];
   }
 
-  return involved;
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      if (UUID_RE.test(entry)) {
+        const resolved = lookup.get(entry) ?? lookup.get(entry.toLowerCase());
+        if (resolved) names.push(resolved);
+      } else {
+        names.push(entry);
+      }
+    } else if (typeof entry === 'object' && entry !== null) {
+      const name = entry.name ?? entry.company_name ?? entry.short_name;
+      if (name) { names.push(name); continue; }
+      const id = entry.company_id ?? entry.id;
+      if (id) {
+        const resolved = lookup.get(id);
+        if (resolved) names.push(resolved);
+      }
+    }
+  }
+  return names;
 }
 
 export async function GET(request: NextRequest) {

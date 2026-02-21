@@ -23,12 +23,19 @@ export default function IngestionPage() {
   const FIXED_USER_ID = 'bff82884-0263-4bc1-8895-3567c2c02b55';
 
   // Form inputs
-  const [datasetType, setDatasetType] = useState<string>('shutdowns');
   const [companyId, setCompanyId] = useState<string>(FIXED_COMPANY_ID);
   const [userId, setUserId] = useState<string>(FIXED_USER_ID);
   const [userEmail, setUserEmail] = useState<string>('');
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
+
+  /** n8n only accepts "needs" or "suppliers". Auto-detect from file extension. */
+  const inferDatasetType = (f: File | null): 'needs' | 'suppliers' => {
+    if (!f) return 'needs';
+    const ext = f.name.split('.').pop()?.toLowerCase();
+    if (ext === 'csv' || ext === 'xlsx') return 'suppliers';
+    return 'needs'; // .json, .jsonl → needs
+  };
   
   // Error global para mostrar en alerta roja
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -347,23 +354,37 @@ export default function IngestionPage() {
       setErrorSession(null);
       setSuccessSession(false);
 
+      const detectedType = inferDatasetType(file);
+
       const payload = {
         company_id: finalCompanyId,
         user_id: finalUserId,
         file_name: file.name,
         file_type: file.type || 'application/octet-stream',
-        dataset_type: datasetType,
+        dataset_type: detectedType,
       };
 
       console.log('[handleCreateSession] Enviando request a /api/workflows/upload-session:', payload);
 
-      const response = await fetch('/api/workflows/upload-session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+      const controller = new AbortController();
+      const uiTimeout = setTimeout(() => controller.abort(), 8_000);
+
+      let response: Response;
+      try {
+        response = await fetch('/api/workflows/upload-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } catch (fetchErr: any) {
+        clearTimeout(uiTimeout);
+        if (fetchErr?.name === 'AbortError') {
+          throw new Error('Conexión con n8n fallida — no hubo respuesta en 8 s. Verifica que el workflow esté activo.');
+        }
+        throw fetchErr;
+      }
+      clearTimeout(uiTimeout);
 
       console.log('[handleCreateSession] Respuesta recibida:', {
         status: response.status,
@@ -688,17 +709,15 @@ export default function IngestionPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
-              Tipo de Dataset <span className="text-red-400">*</span>
+              Tipo de Dataset
             </label>
-            <select
-              value={datasetType}
-              onChange={(e) => setDatasetType(e.target.value)}
-              className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
-            >
-              <option value="shutdowns">shutdowns</option>
-              <option value="needs">needs</option>
-              <option value="suppliers">suppliers</option>
-            </select>
+            <div className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-300 flex items-center gap-2">
+              <span className="font-mono text-sm">{inferDatasetType(file)}</span>
+              <span className="text-zinc-500 text-xs">
+                ({file ? (inferDatasetType(file) === 'needs' ? 'JSON / JSONL' : 'CSV / XLSX') : 'selecciona un archivo'})
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-zinc-500">Detectado automáticamente según la extensión del archivo</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">

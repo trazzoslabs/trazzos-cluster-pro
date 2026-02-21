@@ -23,34 +23,31 @@ interface Synergy {
 function SynergiesContent() {
   const searchParams = useSearchParams();
   const clusterId = searchParams.get('cluster_id');
-  
+
   const [synergies, setSynergies] = useState<Synergy[]>([]);
-  const [rawResponse, setRawResponse] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creatingRfp, setCreatingRfp] = useState<string | null>(null);
   const [rfpError, setRfpError] = useState<string | null>(null);
   const [rfpSuccess, setRfpSuccess] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     async function fetchSynergies() {
       try {
         setLoading(true);
         setError(null);
-        
-        const base = clusterId 
-          ? `/api/data/synergies?cluster_id=${clusterId}&debug=1`
-          : '/api/data/synergies?debug=1';
-        
-        const response = await fetch(base);
-        
+
+        const url = clusterId
+          ? `/api/data/synergies?cluster_id=${clusterId}`
+          : '/api/data/synergies';
+
+        const response = await fetch(url);
+
         if (!response.ok) {
           throw new Error(`Failed to fetch synergies: ${response.statusText}`);
         }
 
         const result = await response.json();
-        setRawResponse(result);
         setSynergies(result.data || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load synergies');
@@ -72,9 +69,7 @@ function SynergiesContent() {
       const response = await fetch('/api/workflows/rfp-open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          synergy_id: synergyId,
-        }),
+        body: JSON.stringify({ synergy_id: synergyId }),
       });
 
       if (!response.ok) {
@@ -84,12 +79,9 @@ function SynergiesContent() {
 
       const result = await response.json();
       setRfpSuccess(synergyId);
-      
-      // Opcional: redirigir al RFP creado si viene en la respuesta
+
       if (result.data?.rfp_id) {
-        setTimeout(() => {
-          window.location.href = `/rfp/${result.data.rfp_id}`;
-        }, 2000);
+        setTimeout(() => { window.location.href = `/rfp/${result.data.rfp_id}`; }, 2000);
       }
     } catch (err) {
       setRfpError(err instanceof Error ? err.message : 'Failed to create RFP');
@@ -97,6 +89,8 @@ function SynergiesContent() {
       setCreatingRfp(null);
     }
   };
+
+  // ── Formatters ────────────────────────────────────────────────────────
 
   const formatDate = (dateString: string) => {
     try {
@@ -110,58 +104,70 @@ function SynergiesContent() {
     }
   };
 
-  /** Extract a single human-readable number + unit from volume_total_json */
-  const formatVolume = (volumeJson: any): string => {
-    if (volumeJson == null) return '—';
-    if (typeof volumeJson === 'number') return volumeJson.toLocaleString('es-CO');
-    if (typeof volumeJson === 'string') {
-      const n = Number(volumeJson);
-      return isNaN(n) ? volumeJson : n.toLocaleString('es-CO');
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  /**
+   * Return a flat list of company name strings.
+   * The API already resolves UUIDs → names; this is a safety net for
+   * any remaining objects or UUIDs that slipped through.
+   */
+  const extractCompanyNames = (raw: any): string[] => {
+    if (!raw) return [];
+
+    let entries: any[] = [];
+    if (typeof raw === 'string') {
+      try { entries = JSON.parse(raw); } catch { return UUID_RE.test(raw) ? [] : [raw]; }
+      if (!Array.isArray(entries)) entries = [entries];
+    } else if (Array.isArray(raw)) {
+      entries = raw;
+    } else if (typeof raw === 'object') {
+      entries = [raw];
+    } else {
+      return [];
     }
-    if (typeof volumeJson === 'object') {
-      const total = volumeJson.total ?? volumeJson.total_units ?? volumeJson.quantity ?? volumeJson.amount ?? volumeJson.value;
-      const uom = volumeJson.uom ?? volumeJson.unit ?? volumeJson.currency ?? '';
+
+    const names: string[] = [];
+    for (const e of entries) {
+      if (typeof e === 'string') {
+        if (!UUID_RE.test(e)) names.push(e);
+      } else if (typeof e === 'object' && e !== null) {
+        const n = e.name ?? e.company_name ?? e.short_name;
+        if (n && typeof n === 'string') names.push(n);
+      }
+    }
+    return names;
+  };
+
+  /**
+   * Extract total + unit from volume_total_json.
+   * Returns a clean formatted string like "7,020 UN" or "500 Tons".
+   */
+  const formatVolume = (v: any): string => {
+    if (v == null) return '—';
+    if (typeof v === 'number') return v.toLocaleString('es-CO');
+    if (typeof v === 'string') {
+      const n = Number(v);
+      return isNaN(n) ? v : n.toLocaleString('es-CO');
+    }
+    if (typeof v === 'object') {
+      const total = v.total ?? v.total_units ?? v.quantity ?? v.amount ?? v.value;
+      const unit = v.uom ?? v.unit ?? v.currency ?? '';
+
       if (total !== undefined && total !== null) {
         const num = Number(total);
         const formatted = isNaN(num) ? String(total) : num.toLocaleString('es-CO');
-        return uom ? `${formatted} ${uom}` : formatted;
+        return unit ? `${formatted} ${unit}` : formatted;
       }
-      // Fallback: pick first numeric-looking value
-      for (const [, v] of Object.entries(volumeJson)) {
-        if (typeof v === 'number') return v.toLocaleString('es-CO');
-        if (typeof v === 'string' && !isNaN(Number(v))) return Number(v).toLocaleString('es-CO');
+
+      for (const val of Object.values(v)) {
+        if (typeof val === 'number') return val.toLocaleString('es-CO');
+        if (typeof val === 'string' && !isNaN(Number(val))) return Number(val).toLocaleString('es-CO');
       }
-      return '—';
     }
     return '—';
   };
 
-  /** Extract a flat list of company name strings from companies_involved_json */
-  const extractCompanyNames = (companiesJson: any): string[] => {
-    const pick = (entry: any): string | null => {
-      if (!entry) return null;
-      if (typeof entry === 'string') {
-        // Skip UUIDs that look like raw IDs if a name exists elsewhere
-        return entry;
-      }
-      if (typeof entry === 'object') {
-        return entry.name ?? entry.company_name ?? entry.short_name ?? null;
-      }
-      return null;
-    };
-
-    let raw = companiesJson;
-    if (typeof raw === 'string') {
-      try { raw = JSON.parse(raw); } catch { return [raw]; }
-    }
-
-    if (Array.isArray(raw)) {
-      return raw.map(pick).filter((n): n is string => !!n);
-    }
-
-    const name = pick(raw);
-    return name ? [name] : [];
-  };
+  // ── Render ────────────────────────────────────────────────────────────
 
   return (
     <div>
@@ -184,37 +190,18 @@ function SynergiesContent() {
       )}
 
       {!loading && !error && synergies.length === 0 && (
-        <div className="text-center py-12 space-y-3">
-          <p className="text-zinc-400">
-            No hay sinergias disponibles.
-          </p>
-          {rawResponse?._debug && (
-            <div className="inline-block text-left bg-zinc-900 border border-zinc-700 rounded-lg p-4 text-xs space-y-1">
-              <p className="text-zinc-500">Diagnóstico de tablas:</p>
-              <p className="text-zinc-400">operational_data: <span className="text-white font-mono">{rawResponse._debug.operational_data_count ?? '?'}</span></p>
-              <p className="text-zinc-400">synergies: <span className="text-white font-mono">{rawResponse._debug.synergies_count ?? '?'}</span></p>
-              <p className="text-zinc-400">needs: <span className="text-white font-mono">{rawResponse._debug.needs_count ?? '?'}</span></p>
-              <p className="text-zinc-400">shutdowns: <span className="text-white font-mono">{rawResponse._debug.shutdowns_count ?? '?'}</span></p>
-              {(rawResponse._debug.operational_data_count ?? 0) === 0 && (rawResponse._debug.synergies_count ?? 0) === 0 && (
-                <p className="text-yellow-400 mt-2">Ninguna tabla tiene datos de sinergias. Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot;.</p>
-              )}
-              {((rawResponse._debug.operational_data_count ?? 0) > 0 || (rawResponse._debug.needs_count ?? 0) > 0) && (rawResponse._debug.synergies_count ?? 0) === 0 && (
-                <p className="text-yellow-400 mt-2">Hay datos en operational_data o needs, pero no en synergies. Ejecuta &quot;Refrescar Vistas&quot; desde Ingesta.</p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {rawResponse?._debug?.used_fallback && synergies.length > 0 && (
-        <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
-          <p className="text-yellow-300 text-sm">Mostrando todas las sinergias (el filtro original no devolvió resultados).</p>
+        <div className="text-center py-16">
+          <svg className="mx-auto h-12 w-12 text-zinc-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+          </svg>
+          <p className="text-zinc-400 text-lg font-medium mb-1">Sin sinergias disponibles</p>
+          <p className="text-zinc-500 text-sm">Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot; para generar sinergias.</p>
         </div>
       )}
 
       {!loading && !error && synergies.length > 0 && (
         <SectionCard title="Sinergias detectadas">
-          {/* Resumen */}
+          {/* Summary strip */}
           <div className="flex flex-wrap gap-4 mb-5 text-sm">
             <div className="bg-zinc-800/60 rounded-lg px-4 py-2">
               <span className="text-zinc-400">Total:</span>{' '}
@@ -254,7 +241,7 @@ function SynergiesContent() {
                         )}
                       </td>
 
-                      {/* Empresas — pill tags */}
+                      {/* Empresas — green pill tags */}
                       <td className="px-4 py-3">
                         {companies.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
@@ -272,7 +259,7 @@ function SynergiesContent() {
                         )}
                       </td>
 
-                      {/* Ventana (inicio – fin combinados) */}
+                      {/* Ventana */}
                       <td className="px-4 py-3 text-sm text-zinc-400 whitespace-nowrap">
                         {synergy.window_start || synergy.window_end ? (
                           <>
@@ -330,56 +317,7 @@ function SynergiesContent() {
 
       {rfpSuccess && (
         <div className="mt-6 bg-green-900/20 border border-green-800 rounded-lg p-4">
-          <p className="text-green-300">✓ RFP creado exitosamente. Redirigiendo...</p>
-        </div>
-      )}
-
-      {/* Panel de debug — muestra datos crudos de la API */}
-      {!loading && (
-        <div className="mt-8">
-          <button
-            onClick={() => setShowDebug(d => !d)}
-            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1"
-          >
-            <svg className={`w-3 h-3 transition-transform ${showDebug ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            Debug: Datos crudos de API
-          </button>
-
-          {showDebug && (
-            <div className="mt-2 bg-zinc-900 border border-zinc-700 rounded-lg p-4 overflow-auto max-h-[500px]">
-              {rawResponse?._debug && (
-                <div className="mb-4 space-y-2 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-500">Fuente:</span>
-                    <span className="text-white font-mono">{rawResponse._debug.source || 'ninguna'}</span>
-                    {rawResponse._debug.used_fallback && (
-                      <span className="text-yellow-400">(fallback)</span>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {['operational_data', 'synergies', 'needs', 'shutdowns', 'companies'].map(t => (
-                      <div key={t} className="bg-zinc-800 rounded p-2">
-                        <span className="text-zinc-400">{t}:</span>{' '}
-                        <span className="text-white font-mono">
-                          {rawResponse._debug[`${t}_count`] ?? '?'}
-                        </span>
-                        {rawResponse._debug[`${t}_error`] && (
-                          <span className="text-red-400 block text-[10px] mt-0.5">
-                            {rawResponse._debug[`${t}_error`]}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <pre className="text-xs text-zinc-400 whitespace-pre-wrap font-mono">
-                {JSON.stringify(rawResponse, null, 2)}
-              </pre>
-            </div>
-          )}
+          <p className="text-green-300">RFP creado exitosamente. Redirigiendo...</p>
         </div>
       )}
     </div>
