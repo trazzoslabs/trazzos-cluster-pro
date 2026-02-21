@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     const { data, error } = await supabaseServer
       .from('clusters')
-      .select('*')
+      .select('cluster_id,name')
       .order('name');
 
     if (error) {

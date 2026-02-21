@@ -3,6 +3,7 @@ import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '..
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
+const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
 const SESSION_TIMEOUT_MS = 5_000;
 
@@ -19,18 +20,29 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
+    const fileName = String(body?.file_name ?? '').toLowerCase();
+    const isJsonUpload = fileName.endsWith('.json') || fileName.endsWith('.jsonl');
+    const isCsvUpload = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
+
+    // Normalize payload before forwarding to n8n
+    const payload = {
+      ...body,
+      cluster_id: FIXED_CLUSTER_ID,
+      dataset_type: isJsonUpload ? 'needs' : isCsvUpload ? 'suppliers' : body?.dataset_type,
+    };
+
     // Validate required fields that n8n needs for the hash
-    if (!body.company_id) {
+    if (!payload.company_id || String(payload.company_id).trim().length === 0) {
       return createErrorResponse('company_id es requerido', 400);
     }
-    if (!body.dataset_type || !['needs', 'suppliers'].includes(body.dataset_type)) {
+    if (!payload.dataset_type || !['needs', 'suppliers'].includes(payload.dataset_type)) {
       return createErrorResponse(
-        `dataset_type inválido: "${body.dataset_type}". Valores aceptados: needs, suppliers`,
+        `dataset_type inválido: "${payload.dataset_type}". Valores aceptados: needs, suppliers`,
         400,
       );
     }
 
-    const correlationId = body?.correlation_id;
+    const correlationId = payload?.correlation_id;
     const url = `${N8N_WEBHOOK_BASE}/api/upload/session`;
 
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
@@ -38,14 +50,15 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s', url, body.dataset_type, body.company_id);
+    console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id);
+    console.log('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {
