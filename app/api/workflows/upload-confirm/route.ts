@@ -2,12 +2,13 @@ import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
+const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
 export async function POST(request: NextRequest) {
   try {
-    if (!N8N_WEBHOOK_BASE) {
-      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
+    if (!N8N_CONFIRM_WEBHOOK_URL && !N8N_WEBHOOK_BASE) {
+      return createErrorResponse('N8N_CONFIRM_WEBHOOK_URL or N8N_WEBHOOK_BASE environment variable is not set', 500);
     }
 
     let body;
@@ -37,7 +38,8 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('job_id y correlation_id son requeridos para confirmar workflow', 400, correlationId);
     }
 
-    const url = `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
+    const baseConfirmUrl = N8N_CONFIRM_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
+    const url = `${baseConfirmUrl}?job_id=${encodeURIComponent(jobId)}&correlation_id=${encodeURIComponent(correlationIdValue)}`;
     
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
@@ -53,6 +55,7 @@ export async function POST(request: NextRequest) {
       payload?.job_id,
       payload?.correlation_id,
     );
+    console.log('URL de Confirmación enviada:', url);
 
     const response = await fetchWithTimeout(url, {
       method: 'POST',
