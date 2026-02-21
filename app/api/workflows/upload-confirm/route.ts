@@ -20,19 +20,23 @@ export async function POST(request: NextRequest) {
 
     const jobId = String(body?.job_id ?? '').trim();
     const correlationIdValue = String(body?.correlation_id ?? '').trim();
-    const payload = {
+    const finalPayload = {
       job_id: jobId,
       correlation_id: correlationIdValue,
+      id: jobId,
+      external_id: jobId,
+      uuid: jobId,
+      data: { job_id: jobId },
     };
-    const correlationId = payload?.correlation_id;
+    const correlationId = finalPayload?.correlation_id;
 
     const hasInvalidIds =
-      !payload?.job_id ||
-      !payload?.correlation_id ||
-      payload.job_id.toLowerCase() === 'undefined' ||
-      payload.correlation_id.toLowerCase() === 'undefined' ||
-      payload.job_id.toLowerCase() === 'null' ||
-      payload.correlation_id.toLowerCase() === 'null';
+      !finalPayload?.job_id ||
+      !finalPayload?.correlation_id ||
+      finalPayload.job_id.toLowerCase() === 'undefined' ||
+      finalPayload.correlation_id.toLowerCase() === 'undefined' ||
+      finalPayload.job_id.toLowerCase() === 'null' ||
+      finalPayload.correlation_id.toLowerCase() === 'null';
     if (hasInvalidIds) {
       console.error('[upload-confirm] ERROR: Faltan IDs de seguimiento');
       return createErrorResponse('job_id y correlation_id son requeridos para confirmar workflow', 400, correlationId);
@@ -52,15 +56,16 @@ export async function POST(request: NextRequest) {
     console.log(
       '[upload-confirm] → POST %s  job_id=%s correlation_id=%s',
       url,
-      payload?.job_id,
-      payload?.correlation_id,
+      finalPayload?.job_id,
+      finalPayload?.correlation_id,
     );
     console.log('URL de Confirmación enviada:', url);
+    console.log('PAYLOAD FINAL ENVIADO A N8N:', JSON.stringify(finalPayload));
 
     const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(finalPayload),
     });
 
     let data;
@@ -114,8 +119,8 @@ export async function POST(request: NextRequest) {
     console.log(
       '[V6 trigger ACK] n8n upload-confirm OK status=%d job_id=%s correlation_id=%s',
       response.status,
-      payload?.job_id,
-      payload?.correlation_id,
+      finalPayload?.job_id,
+      finalPayload?.correlation_id,
     );
 
     // Verificar que data tenga contenido válido
