@@ -99,6 +99,7 @@ export async function POST(request: NextRequest) {
       job_id: String(generatedJobId),
       id: String(generatedJobId),
       correlation_id: String(generatedJobId),
+      external_id: String(generatedJobId),
       file_name: String(normalizedBody.file_name ?? inboundFile?.name ?? 'data.csv'),
       file_type: String(normalizedBody.file_type ?? inboundFile?.type ?? 'text/csv'),
       dataset_type: String(normalizedBody.dataset_type),
@@ -117,6 +118,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('Llamando a n8n vía URL:', n8nUrl);
+    console.log('ENVIANDO A N8N:', JSON.stringify(payload, null, 2));
     console.log('Cuerpo enviado a n8n:', JSON.stringify(payload));
 
     let response: Response;
