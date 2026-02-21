@@ -53,8 +53,8 @@ export async function POST(request: NextRequest) {
     const isCsvUpload = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
     const generatedJobId = crypto.randomUUID();
 
-    // Normalize payload before forwarding to n8n
-    const payload: Record<string, any> = {
+    // Normalize inbound body before creating outbound payload
+    const normalizedBody: Record<string, any> = {
       ...(body as Record<string, any>),
       job_id: generatedJobId,
       cluster_id: FIXED_CLUSTER_ID,
@@ -62,15 +62,15 @@ export async function POST(request: NextRequest) {
     };
 
     // Validate required fields that n8n needs for the hash
-    if (!payload.company_id || String(payload.company_id).trim().length === 0) {
+    if (!normalizedBody.company_id || String(normalizedBody.company_id).trim().length === 0) {
       return createErrorResponse('company_id es requerido', 400);
     }
-    if (!payload.job_id || String(payload.job_id).trim().length === 0) {
+    if (!normalizedBody.job_id || String(normalizedBody.job_id).trim().length === 0) {
       throw new Error('ERROR CRÍTICO: job_id undefined');
     }
-    if (!payload.dataset_type || !['needs', 'suppliers'].includes(payload.dataset_type)) {
+    if (!normalizedBody.dataset_type || !['needs', 'suppliers'].includes(normalizedBody.dataset_type)) {
       return createErrorResponse(
-        `dataset_type inválido: "${payload.dataset_type}". Valores aceptados: needs, suppliers`,
+        `dataset_type inválido: "${normalizedBody.dataset_type}". Valores aceptados: needs, suppliers`,
         400,
       );
     }
@@ -92,28 +92,35 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
+    const payload = {
+      company_id: String(normalizedBody.company_id),
+      user_id: String(normalizedBody.user_id ?? ''),
+      job_id: String(generatedJobId),
+      id: String(generatedJobId),
+      correlation_id: String(generatedJobId),
+      file_name: String(normalizedBody.file_name ?? inboundFile?.name ?? 'data.csv'),
+      file_type: String(normalizedBody.file_type ?? inboundFile?.type ?? 'text/csv'),
+      dataset_type: String(normalizedBody.dataset_type),
+      cluster_id: String(normalizedBody.cluster_id),
+      data: {
+        job_id: String(generatedJobId),
+      },
+    };
+
     safeLog('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
     safeLog('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
     if (inboundFile) {
       safeLog('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
     }
 
-    const outboundPayload = {
-      company_id: String(payload.company_id),
-      user_id: String(payload.user_id ?? ''),
-      job_id: String(payload.job_id),
-      file_name: String(payload.file_name ?? inboundFile?.name ?? 'data.csv'),
-      file_type: String(payload.file_type ?? inboundFile?.type ?? 'text/csv'),
-      dataset_type: String(payload.dataset_type),
-      cluster_id: String(payload.cluster_id),
-    };
+    console.log('Cuerpo enviado a n8n:', JSON.stringify(payload));
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(outboundPayload),
+        body: JSON.stringify(payload),
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {

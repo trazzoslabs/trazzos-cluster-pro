@@ -32,3 +32,4 @@ export const supabaseClient: SupabaseClient = createClient(
 export const isSupabaseClientConfigured = !isMissing;
 
 
+
