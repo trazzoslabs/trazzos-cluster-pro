@@ -200,6 +200,15 @@ function SynergiesContent() {
               <p className="text-red-200 font-semibold text-sm mb-1">Error en procesamiento de n8n</p>
               <p className="text-red-300 text-sm">{error}</p>
               <p className="text-red-400/70 text-xs mt-2">Revise el formato del JSON subido y que el workflow de n8n esté activo.</p>
+              <Link
+                href="/ingestion"
+                className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-md transition-colors text-sm font-medium"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Reintentar Carga
+              </Link>
             </div>
           </div>
         </div>
@@ -215,8 +224,35 @@ function SynergiesContent() {
         </div>
       )}
 
-      {!loading && !error && synergies.length > 0 && (
+      {!loading && !error && synergies.length > 0 && (() => {
+        const failedCount = synergies.filter(s => ['error', 'failed'].includes(s.status?.toLowerCase() ?? '')).length;
+        return (
         <SectionCard title="Sinergias detectadas">
+          {failedCount > 0 && (
+            <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 mb-5 flex items-center justify-between">
+              <div className="flex items-start gap-3">
+                <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <p className="text-red-200 font-semibold text-sm">
+                    {failedCount} sinergia{failedCount > 1 ? 's' : ''} con error de procesamiento
+                  </p>
+                  <p className="text-red-400/70 text-xs mt-1">Error en procesamiento de n8n: Revise el formato del JSON</p>
+                </div>
+              </div>
+              <Link
+                href="/ingestion"
+                className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-md transition-colors text-sm font-medium"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Reintentar Carga
+              </Link>
+            </div>
+          )}
+
           {/* Summary strip */}
           <div className="flex flex-wrap gap-4 mb-5 text-sm">
             <div className="bg-zinc-800/60 rounded-lg px-4 py-2">
@@ -324,7 +360,8 @@ function SynergiesContent() {
             </table>
           </div>
         </SectionCard>
-      )}
+        );
+      })()}
 
       {rfpError && (
         <div className="mt-6 bg-red-900/20 border border-red-800 rounded-lg p-4">

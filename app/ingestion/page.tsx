@@ -403,6 +403,7 @@ export default function IngestionPage() {
       const data = result.data || result;
       
       console.log('[handleCreateSession] Datos recibidos:', data);
+      console.log('%c[V2 Completado] ✓ Sesión creada con éxito — esperando procesamiento de sinergias…', 'color: #9aff8d; font-weight: bold');
       
       setSessionResponse(data);
       setSuccessSession(true);
@@ -595,6 +596,7 @@ export default function IngestionPage() {
       }
 
       if (dispatched) {
+        console.log('%c[V2 Completado] ✓ Confirm dispatched — esperando procesamiento de sinergias (V6)…', 'color: #9aff8d; font-weight: bold');
         setSuccessConfirm(true);
         setCompletionToast('Confirmación enviada — refrescando vistas en 5s…');
         setTimeout(() => setCompletionToast(null), 8000);
