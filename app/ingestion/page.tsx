@@ -60,6 +60,7 @@ export default function IngestionPage() {
   const [errorSession, setErrorSession] = useState<string | null>(null);
   const [successSession, setSuccessSession] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [correlationId, setCorrelationId] = useState<string | null>(null);
 
   // Step 2 - Upload
   const [uploading, setUploading] = useState(false);
@@ -864,11 +865,15 @@ export default function IngestionPage() {
       const sessionResult = await sessionResponse.json().catch(() => ({}));
       const responseData = sessionResult?.data || {};
       const receivedJobId = responseData?.job_id;
-      const correlationId = responseData?.correlation_id || sessionResult?.correlation_id;
+      const receivedCorrelationId = responseData?.correlation_id || sessionResult?.correlation_id;
       const signedUrlFromSession = responseData?.signed_url;
-      if (!receivedJobId || !correlationId || !signedUrlFromSession) {
+      if (!receivedJobId || !receivedCorrelationId || !signedUrlFromSession) {
         throw new Error('La sesión no devolvió job_id, correlation_id o signed_url');
       }
+
+      // Persistencia de IDs de seguimiento para Fase 2 (Confirm)
+      setJobId(String(receivedJobId));
+      setCorrelationId(String(receivedCorrelationId));
 
       // Fase 2 (Upload): subir archivo a signed_url de storage
       setUploadPhase('uploading');
@@ -884,12 +889,18 @@ export default function IngestionPage() {
 
       // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso
       setUploadPhase('processing');
+      const confirmJobId = String(receivedJobId || jobId || '');
+      const confirmCorrelationId = String(receivedCorrelationId || correlationId || '');
+      if (!confirmJobId || !confirmCorrelationId) {
+        console.error('ERROR: Faltan IDs de seguimiento');
+        throw new Error('Faltan IDs de seguimiento');
+      }
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          job_id: String(receivedJobId),
-          correlation_id: String(correlationId),
+          job_id: confirmJobId,
+          correlation_id: confirmCorrelationId,
         }),
       });
 
@@ -898,15 +909,14 @@ export default function IngestionPage() {
         throw new Error(errBody.error || errBody.message || `Error ${confirmResponse.status}`);
       }
 
-      setJobId(receivedJobId);
       setSessionResponse({
-        job_id: receivedJobId,
-        correlation_id: correlationId,
+        job_id: confirmJobId,
+        correlation_id: confirmCorrelationId,
         signed_url: signedUrlFromSession,
       });
       setSuccessSession(true);
       setFile(null);
-      persistTrackingIds({ jobId: receivedJobId });
+      persistTrackingIds({ jobId: confirmJobId });
       fetchRecentJobs();
     } catch (err) {
       console.log('[upload] error:', err);

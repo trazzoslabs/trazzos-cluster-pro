@@ -3,7 +3,6 @@ import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '..
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
-const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,14 +17,14 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const correlationId = body?.correlation_id;
     const payload = {
-      ...body,
-      cluster_id: body?.cluster_id || FIXED_CLUSTER_ID,
+      job_id: body?.job_id,
+      correlation_id: body?.correlation_id,
     };
+    const correlationId = payload?.correlation_id;
 
-    if (!payload?.job_id) {
-      console.error('[upload-confirm] ERROR CRÍTICO: job_id undefined en body hacia webhook n8n');
+    if (!payload?.job_id || !payload?.correlation_id) {
+      console.error('[upload-confirm] ERROR: Faltan IDs de seguimiento');
       return createErrorResponse('job_id es requerido para confirmar workflow', 400, correlationId);
     }
 
@@ -40,10 +39,9 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      '[upload-confirm] → POST %s  job_id=%s cluster_id=%s correlation_id=%s',
+      '[upload-confirm] → POST %s  job_id=%s correlation_id=%s',
       url,
       payload?.job_id,
-      payload?.cluster_id,
       payload?.correlation_id,
     );
 
@@ -102,10 +100,9 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      '[V6 trigger ACK] n8n upload-confirm OK status=%d job_id=%s cluster_id=%s correlation_id=%s',
+      '[V6 trigger ACK] n8n upload-confirm OK status=%d job_id=%s correlation_id=%s',
       response.status,
       payload?.job_id,
-      payload?.cluster_id,
       payload?.correlation_id,
     );
 
