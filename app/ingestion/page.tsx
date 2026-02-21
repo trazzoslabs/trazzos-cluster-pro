@@ -48,6 +48,12 @@ export default function IngestionPage() {
     return 'needs';
   };
 
+  const normalizeTrackingId = (value: unknown): string => {
+    const str = String(value ?? '').trim();
+    if (!str || str.toLowerCase() === 'undefined' || str.toLowerCase() === 'null') return '';
+    return str;
+  };
+
   // Error global para mostrar en alerta roja
   const [globalError, setGlobalError] = useState<string | null>(null);
 
@@ -864,8 +870,12 @@ export default function IngestionPage() {
 
       const sessionResult = await sessionResponse.json().catch(() => ({}));
       const responseData = sessionResult?.data || {};
-      const receivedJobId = responseData?.job_id;
-      const receivedCorrelationId = responseData?.correlation_id || sessionResult?.correlation_id;
+      const receivedJobId = normalizeTrackingId(
+        responseData?.job_id ?? sessionResult?.job_id ?? responseData?.id ?? sessionResult?.id,
+      );
+      const receivedCorrelationId = normalizeTrackingId(
+        responseData?.correlation_id ?? sessionResult?.correlation_id,
+      );
       const signedUrlFromSession = responseData?.signed_url;
       if (!receivedJobId || !receivedCorrelationId || !signedUrlFromSession) {
         throw new Error('La sesión no devolvió job_id, correlation_id o signed_url');
@@ -889,8 +899,8 @@ export default function IngestionPage() {
 
       // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso
       setUploadPhase('processing');
-      const confirmJobId = String(receivedJobId || jobId || '');
-      const confirmCorrelationId = String(receivedCorrelationId || correlationId || '');
+      const confirmJobId = normalizeTrackingId(receivedJobId || jobId || '');
+      const confirmCorrelationId = normalizeTrackingId(receivedCorrelationId || correlationId || '');
       if (!confirmJobId || !confirmCorrelationId) {
         console.error('ERROR: Faltan IDs de seguimiento');
         throw new Error('Faltan IDs de seguimiento');

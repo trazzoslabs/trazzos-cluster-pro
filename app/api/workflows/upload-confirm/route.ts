@@ -17,15 +17,24 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
+    const jobId = String(body?.job_id ?? '').trim();
+    const correlationIdValue = String(body?.correlation_id ?? '').trim();
     const payload = {
-      job_id: body?.job_id,
-      correlation_id: body?.correlation_id,
+      job_id: jobId,
+      correlation_id: correlationIdValue,
     };
     const correlationId = payload?.correlation_id;
 
-    if (!payload?.job_id || !payload?.correlation_id) {
+    const hasInvalidIds =
+      !payload?.job_id ||
+      !payload?.correlation_id ||
+      payload.job_id.toLowerCase() === 'undefined' ||
+      payload.correlation_id.toLowerCase() === 'undefined' ||
+      payload.job_id.toLowerCase() === 'null' ||
+      payload.correlation_id.toLowerCase() === 'null';
+    if (hasInvalidIds) {
       console.error('[upload-confirm] ERROR: Faltan IDs de seguimiento');
-      return createErrorResponse('job_id es requerido para confirmar workflow', 400, correlationId);
+      return createErrorResponse('job_id y correlation_id son requeridos para confirmar workflow', 400, correlationId);
     }
 
     const url = `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
