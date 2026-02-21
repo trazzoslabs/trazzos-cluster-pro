@@ -172,28 +172,7 @@ export default function IngestionPage() {
     };
   };
 
-  // Extraer uploadId de sessionResponse para determinar el estado del botón
-  const uploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
-  const isConfirmed = successConfirm;
-
-  // Texto del botón según el estado
-  const getButtonText = (): string => {
-    if (loadingSession) return 'Iniciando...';
-    if (uploading) return 'Subiendo...';
-    if (loadingConfirm) return 'Confirmando...';
-    
-    if (!uploadId) {
-      return 'Subir archivo';
-    }
-    
-    if (uploadId && !isConfirmed) {
-      return 'Confirmar y procesar';
-    }
-    
-    return 'Procesado';
-  };
-
-  const buttonText = getButtonText();
+  const buttonText = loadingSession ? 'Subiendo...' : 'Subir archivo';
 
   // Recent Jobs
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
@@ -839,106 +818,54 @@ export default function IngestionPage() {
   // Función unificada para manejar el submit del formulario
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      console.log('[handleUpload] Formulario enviado');
-      setGlobalError(null);
-      
-      // Validar archivo primero
-      if (!file) {
-        const errorMsg = 'Por favor selecciona un archivo';
-        console.error('[handleUpload] Error:', errorMsg);
-        setGlobalError(errorMsg);
-        return;
-      }
+    setGlobalError(null);
+    setErrorSession(null);
+    setSuccessSession(false);
 
-      // Validar tipo de archivo
+    try {
+      if (!file) throw new Error('Por favor selecciona un archivo');
+
       const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
       const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
       if (!validExtensions.includes(fileExtension)) {
-        const errorMsg = `Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`;
-        console.error('[handleUpload] Error:', errorMsg);
-        setGlobalError(errorMsg);
-        return;
+        throw new Error(`Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`);
       }
 
-      // Orden estricto solicitado:
-      // 1) Generar job_id local al inicio
-      // 2) Notificar "Procesando archivo..."
-      // 3) Disparar F1 y F2 en paralelo (fire & forget)
+      setLoadingSession(true);
       const localJobId = createClientJobId();
-      persistTrackingIds({ jobId: localJobId });
-      setJobId(localJobId);
-      setCompletionToast('Procesando archivo...');
-      console.log('[handleUpload] job_id local generado:', localJobId);
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+      formData.append('company_id', FIXED_COMPANY_ID);
+      formData.append('user_id', FIXED_USER_ID);
+      formData.append('job_id', localJobId);
+      formData.append('file_name', file.name);
+      formData.append('file_type', file.type || 'application/octet-stream');
+      formData.append('dataset_type', inferDatasetType(file));
+      formData.append('cluster_id', FIXED_CLUSTER_ID);
 
-      let preparedUpload: PreparedUpload;
-      try {
-        preparedUpload = await buildPreparedUpload(file);
-      } catch (prepErr) {
-        const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
-        console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
-        window.alert(`Error técnico: ${msg}`);
-        setGlobalError(`Error preparando archivo: ${msg}`);
-        return;
+      const response = await fetch('/api/workflows/upload-session', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody.error || errBody.message || `Error ${response.status}`);
       }
 
-      // Fase 1 - fire & forget (crear sesión + subida a signed URL si aplica)
-      void (async () => {
-        try {
-          const sessionResult = await handleCreateSession(preparedUpload, localJobId);
-          if (sessionResult?.signedUrl) {
-            await handleUploadFile(sessionResult.signedUrl, preparedUpload);
-          } else {
-            console.warn('[handleUpload] Fase 1 sin signedUrl; se continúa con Fase 2 por modo emergencia');
-          }
-        } catch (err) {
-          console.error('[handleUpload] Error en Fase 1 (fire & forget):', err);
-          window.alert(`Error técnico Fase 1: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      })();
-
-      // Fase 2 - fire & forget inmediata, sin esperar Fase 1
-      alert('Iniciando Fase 2');
-      void (async () => {
-        try {
-          const confirmPayload = {
-            job_id: localJobId,
-            cluster_id: FIXED_CLUSTER_ID,
-            user_email: userEmail.trim() || 'user@example.com',
-            app_url: appUrl.trim() || undefined,
-          };
-
-          if (!confirmPayload.job_id) throw new Error('ERROR CRÍTICO: job_id undefined');
-
-          console.log('[handleUpload][Fase2] Payload exacto:', confirmPayload);
-          const res = await fetch('/api/workflows/upload-confirm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(confirmPayload),
-          });
-          const text = await res.text().catch(() => '');
-          console.log('[handleUpload][Fase2] Respuesta:', res.status, res.statusText, text);
-
-          if (!res.ok) {
-            throw new Error(`Fase 2 falló (${res.status}): ${text || res.statusText}`);
-          }
-
-          setSuccessConfirm(true);
-          setCompletionToast('Fase 2 iniciada correctamente');
-          fetchRecentJobs();
-          startJobPolling();
-          scheduleDelayedRefresh();
-        } catch (err) {
-          console.error('[handleUpload] Error en Fase 2 (fire & forget):', err);
-          window.alert(`Error técnico Fase 2: ${err instanceof Error ? err.message : String(err)}`);
-          setGlobalError(err instanceof Error ? err.message : 'Error inesperado en Fase 2');
-        }
-      })();
+      const result = await response.json().catch(() => ({}));
+      const receivedJobId = result?.data?.job_id || localJobId;
+      setJobId(receivedJobId);
+      setSessionResponse({ job_id: receivedJobId });
+      setSuccessSession(true);
+      setFile(null);
+      persistTrackingIds({ jobId: receivedJobId });
+      fetchRecentJobs();
     } catch (err) {
-      console.error('[handleUpload] ERROR GLOBAL:', err);
-      const errorMsg = err instanceof Error ? err.message : 'Error inesperado en la carga';
-      window.alert(`Error técnico: ${errorMsg}`);
-      setGlobalError(errorMsg);
+      console.log('[upload] error:', err);
+      setGlobalError(err instanceof Error ? err.message : 'Error al subir archivo');
+    } finally {
+      setLoadingSession(false);
     }
   };
 
@@ -959,23 +886,6 @@ export default function IngestionPage() {
 
   return (
     <div>
-      {/* Toast de job completado */}
-      {completionToast && (
-        <div className="fixed top-24 right-6 z-50 animate-[fadeInScale_0.3s_ease-out_forwards]">
-          <div className="bg-green-900/90 backdrop-blur-sm border border-green-600 rounded-lg p-4 shadow-xl flex items-center gap-3 min-w-[300px]">
-            <svg className="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <p className="text-green-200 text-sm font-medium">{completionToast}</p>
-            <button onClick={() => setCompletionToast(null)} className="text-green-400 hover:text-white ml-auto">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
       <PageTitle
         title="Cargas de Datos"
         subtitle="Sube y procesa archivos para análisis y normalización"
@@ -1094,14 +1004,14 @@ export default function IngestionPage() {
 
         {successSession && (
           <div className="bg-green-900/20 border border-green-800 rounded-lg p-3 mb-4">
-            <p className="text-green-300 text-sm">✓ Sesión creada exitosamente</p>
+            <p className="text-green-300 text-sm">Archivo recibido, procesando sinergias...</p>
           </div>
         )}
 
         <form onSubmit={handleUpload} className="space-y-4">
           <button
             type="submit"
-            disabled={loadingSession || uploading || loadingConfirm || !file || isConfirmed}
+            disabled={loadingSession || !file}
             className="w-full px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
           >
             {buttonText}

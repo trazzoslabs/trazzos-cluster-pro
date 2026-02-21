@@ -1,12 +1,9 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
-import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
-const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
-
 const SESSION_TIMEOUT_MS = 60_000;
 
 const safeLog = (...args: any[]) => {
@@ -25,108 +22,50 @@ export async function POST(request: NextRequest) {
 
     const contentType = request.headers.get('content-type') || '';
     const isMultipart = contentType.includes('multipart/form-data');
-
-    let body: Record<string, any> = {};
-    let inboundFile: File | null = null;
-    try {
-      if (isMultipart) {
-        const form = await request.formData();
-        inboundFile = (form.get('file') as File) || null;
-        body = {
-          company_id: form.get('company_id'),
-          user_id: form.get('user_id'),
-          job_id: form.get('job_id'),
-          file_name: form.get('file_name') || inboundFile?.name,
-          file_type: form.get('file_type') || inboundFile?.type,
-          dataset_type: form.get('dataset_type'),
-          cluster_id: form.get('cluster_id'),
-          correlation_id: form.get('correlation_id'),
-        };
-      } else {
-        body = await request.json();
-      }
-    } catch {
-      return createErrorResponse('Invalid request body', 400);
-    }
-
-    const fileName = String(body?.file_name ?? '').toLowerCase();
-    const isJsonUpload = fileName.endsWith('.json') || fileName.endsWith('.jsonl');
-    const isCsvUpload = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
     const generatedJobId = crypto.randomUUID();
-
-    // Normalize inbound body before creating outbound payload
-    const normalizedBody: Record<string, any> = {
-      ...(body as Record<string, any>),
-      job_id: generatedJobId,
-      cluster_id: FIXED_CLUSTER_ID,
-      dataset_type: isJsonUpload ? 'needs' : isCsvUpload ? 'suppliers' : body?.dataset_type,
-    };
-
-    // Validate required fields that n8n needs for the hash
-    if (!normalizedBody.company_id || String(normalizedBody.company_id).trim().length === 0) {
-      return createErrorResponse('company_id es requerido', 400);
-    }
-    if (!normalizedBody.job_id || String(normalizedBody.job_id).trim().length === 0) {
-      throw new Error('ERROR CRÍTICO: job_id undefined');
-    }
-    if (!normalizedBody.dataset_type || !['needs', 'suppliers'].includes(normalizedBody.dataset_type)) {
-      return createErrorResponse(
-        `dataset_type inválido: "${normalizedBody.dataset_type}". Valores aceptados: needs, suppliers`,
-        400,
-      );
+    if (!isMultipart) {
+      return createErrorResponse('Use multipart/form-data con el archivo', 400);
     }
 
-    // Registro silencioso previo en DB para asegurar trazabilidad del job
-    const { error: insertErr } = await supabaseServer
-      .from('ingestion_jobs')
-      .insert({ job_id: generatedJobId, status: 'running' });
-
-    if (insertErr) {
-      safeError('[upload-session] Error insertando ingestion_jobs:', insertErr);
-      return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500);
+    const form = await request.formData();
+    const inboundFile = (form.get('file') as File) || null;
+    if (!inboundFile) {
+      return createErrorResponse('Archivo requerido en campo "file"', 400);
     }
+
+    const fileName = String(form.get('file_name') || inboundFile.name || '').toLowerCase();
+    const datasetTypeFromFile = fileName.endsWith('.csv') || fileName.endsWith('.xlsx') ? 'suppliers' : 'needs';
+    const datasetType = String(form.get('dataset_type') || datasetTypeFromFile);
 
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
+    const n8nUrl = `${webhookBaseUrl}?job_id=${generatedJobId}&id=${generatedJobId}`;
 
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    const outboundForm = new FormData();
+    outboundForm.append('file', inboundFile, inboundFile.name);
+    outboundForm.append('job_id', generatedJobId);
+    outboundForm.append('id', generatedJobId);
+    outboundForm.append('correlation_id', generatedJobId);
+    outboundForm.append('external_id', generatedJobId);
+    outboundForm.append('company_id', String(form.get('company_id') || ''));
+    outboundForm.append('user_id', String(form.get('user_id') || ''));
+    outboundForm.append('cluster_id', String(form.get('cluster_id') || ''));
+    outboundForm.append('dataset_type', datasetType);
+    outboundForm.append('file_name', String(form.get('file_name') || inboundFile.name));
+    outboundForm.append('file_type', String(form.get('file_type') || inboundFile.type || 'application/octet-stream'));
+
+    const headers: HeadersInit = {};
     if (N8N_WEBHOOK_TOKEN && !N8N_WEBHOOK_TOKEN.startsWith('http')) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    const payload = {
-      company_id: String(normalizedBody.company_id),
-      user_id: String(normalizedBody.user_id ?? ''),
-      job_id: String(generatedJobId),
-      id: String(generatedJobId),
-      correlation_id: String(generatedJobId),
-      external_id: String(generatedJobId),
-      file_name: String(normalizedBody.file_name ?? inboundFile?.name ?? 'data.csv'),
-      file_type: String(normalizedBody.file_type ?? inboundFile?.type ?? 'text/csv'),
-      dataset_type: String(normalizedBody.dataset_type),
-      cluster_id: String(normalizedBody.cluster_id),
-      data: {
-        job_id: String(generatedJobId),
-      },
-    };
-
-    const n8nUrl = `${webhookBaseUrl}?job_id=${generatedJobId}&id=${generatedJobId}`;
-
-    safeLog('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', n8nUrl, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
-    safeLog('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
-    if (inboundFile) {
-      safeLog('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
-    }
-
-    console.log('Llamando a n8n vía URL:', n8nUrl);
-    console.log('ENVIANDO A N8N:', JSON.stringify(payload, null, 2));
-    console.log('Cuerpo enviado a n8n:', JSON.stringify(payload));
+    safeLog('[upload-session] → POST multipart a n8n: %s', n8nUrl);
 
     let response: Response;
     try {
       response = await fetchWithTimeout(n8nUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: outboundForm,
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {
@@ -165,11 +104,13 @@ export async function POST(request: NextRequest) {
     }
 
     safeLog('[upload-session] ← %d OK', response.status);
-    const responseData = {
-      ...(typeof data === 'object' && data !== null ? data : { message: data }),
-      job_id: (data as any)?.job_id || payload.job_id,
-    };
-    return createSuccessResponse(responseData, response.status);
+    return createSuccessResponse(
+      {
+        job_id: generatedJobId,
+        message: 'Archivo recibido, procesando sinergias...',
+      },
+      200,
+    );
   } catch (error) {
     safeError('Unexpected error in POST /api/workflows/upload-session:', error);
     return createErrorResponse('Internal server error', 500);
