@@ -3,6 +3,7 @@ import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '..
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
+const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +19,10 @@ export async function POST(request: NextRequest) {
     }
 
     const correlationId = body?.correlation_id;
+    const payload = {
+      ...body,
+      cluster_id: body?.cluster_id || FIXED_CLUSTER_ID,
+    };
 
     const url = `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
     
@@ -29,10 +34,18 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
+    console.log(
+      '[upload-confirm] → POST %s  job_id=%s cluster_id=%s correlation_id=%s',
+      url,
+      payload?.job_id,
+      payload?.cluster_id,
+      payload?.correlation_id,
+    );
+
     const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
 
     let data;
@@ -43,6 +56,7 @@ export async function POST(request: NextRequest) {
       console.log('[upload-confirm] Response status:', response.status);
       console.log('[upload-confirm] Response content-type:', contentType);
       console.log('[upload-confirm] Response text length:', responseText?.length || 0);
+      console.log('[upload-confirm] Body completo de respuesta n8n V2:', responseText);
       
       // Verificar si la respuesta está vacía
       if (!responseText || responseText.trim() === '' || responseText.trim() === '{}' || responseText.trim() === '[]') {
@@ -81,6 +95,14 @@ export async function POST(request: NextRequest) {
         correlationId
       );
     }
+
+    console.log(
+      '[V6 trigger ACK] n8n upload-confirm OK status=%d job_id=%s cluster_id=%s correlation_id=%s',
+      response.status,
+      payload?.job_id,
+      payload?.cluster_id,
+      payload?.correlation_id,
+    );
 
     // Verificar que data tenga contenido válido
     if (!data || (typeof data === 'object' && Object.keys(data).length === 0 && !data.message)) {

@@ -682,6 +682,7 @@ export default function IngestionPage() {
       const payload = {
         upload_id: ids.uploadId,
         job_id: ids.jobId || jobId || undefined,
+        cluster_id: FIXED_CLUSTER_ID,
         correlation_id: ids.correlationId || undefined,
         user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
@@ -699,10 +700,13 @@ export default function IngestionPage() {
         });
 
         console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
+        if (response.ok) {
+          console.log('[V6 trigger ACK] upload-confirm respondió OK (200-299) para job_id=%s cluster_id=%s', payload.job_id, payload.cluster_id);
+        }
 
         if (response.ok) {
           const text = await response.text().catch(() => '');
-          console.log('[handleConfirm] Body:', text.substring(0, 200));
+          console.log('[handleConfirm] Body completo de respuesta n8n V2:', text);
           try {
             const parsed = text ? JSON.parse(text) : {};
             setConfirmResponse(parsed.data || parsed);
@@ -801,6 +805,10 @@ export default function IngestionPage() {
       if (!uploadSuccess) {
         return;
       }
+
+      // Paso 3 (automático): Confirmar inmediatamente para disparar V6
+      console.log('[handleUpload] Upload exitoso; disparando automáticamente /api/workflows/upload-confirm para activar V6');
+      await handleConfirm();
     } else if (currentUploadId && !isConfirmed && successUpload) {
       // Paso 3: Confirmar (solo si el archivo ya se subió)
       await handleConfirm();
