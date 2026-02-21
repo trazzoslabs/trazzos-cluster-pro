@@ -24,6 +24,11 @@ export async function POST(request: NextRequest) {
       cluster_id: body?.cluster_id || FIXED_CLUSTER_ID,
     };
 
+    if (!payload?.job_id) {
+      console.error('[upload-confirm] ERROR CRÍTICO: job_id undefined en body hacia webhook n8n');
+      return createErrorResponse('job_id es requerido para confirmar workflow', 400, correlationId);
+    }
+
     const url = `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
     
     const headers: HeadersInit = {

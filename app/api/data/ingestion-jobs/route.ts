@@ -32,7 +32,7 @@ export async function PATCH(request: NextRequest) {
 
     const { error: updateErr } = await supabaseServer
       .from('ingestion_jobs')
-      .update({ status: 'completed', ended_at: new Date().toISOString() })
+      .update({ status: 'completed' })
       .eq('job_id', job_id);
 
     if (updateErr) {
@@ -51,11 +51,10 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const jobId = searchParams.get('job_id');
-    const correlationId = searchParams.get('correlation_id');
 
     let query = supabaseServer
       .from('ingestion_jobs')
-      .select('job_id, upload_id, pipeline_version, mapping_profile_id, status, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id');
+      .select('job_id,status');
 
     // Si viene job_id, devolver 1 registro
     if (jobId) {
@@ -66,44 +65,11 @@ export async function GET(request: NextRequest) {
         return createErrorResponse('Failed to fetch ingestion job', 500);
       }
 
-      // If we have upload_id, fetch dataset_type separately
-      let datasetType = null;
-      if (data?.upload_id) {
-        const { data: upload } = await supabaseServer
-          .from('uploads')
-          .select('declared_dataset_type')
-          .eq('upload_id', data.upload_id)
-          .maybeSingle();
-        
-        if (upload) {
-          datasetType = upload.declared_dataset_type;
-        }
-      }
-
-      return createSuccessResponse({
-        ...data,
-        dataset_type: datasetType,
-      });
+      return createSuccessResponse(data || null);
     }
 
-    // Si viene correlation_id, devolver lista de jobs
-    if (correlationId) {
-      const { data, error } = await query
-        .eq('correlation_id', correlationId)
-        .order('started_at', { ascending: false, nullsFirst: false })
-        .order('job_id', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching ingestion jobs:', error);
-        return createErrorResponse('Failed to fetch ingestion jobs', 500);
-      }
-
-      return createSuccessResponse(data || []);
-    }
-
-    // Si no viene ninguno, devolver últimos 50 ordenados por started_at desc nulls last, luego job_id desc
+    // Si no viene job_id, devolver últimos 50 por job_id desc
     const { data, error } = await query
-      .order('started_at', { ascending: false, nullsFirst: false })
       .order('job_id', { ascending: false })
       .limit(50);
 

@@ -14,7 +14,6 @@ interface SessionResponse {
 interface IngestionJob {
   job_id: string;
   status: string | null;
-  started_at: string | null;
 }
 
 interface PreparedUpload {
@@ -202,11 +201,12 @@ export default function IngestionPage() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Persistir / restaurar correlation_id y jobId en localStorage
-  const persistTrackingIds = (ids: { jobId?: string | null; correlationId?: string | null }) => {
+  // Persistir / restaurar IDs de tracking en localStorage
+  const persistTrackingIds = (ids: { jobId?: string | null; correlationId?: string | null; uploadId?: string | null }) => {
     try {
       if (ids.jobId) localStorage.setItem('trazzos_tracked_job_id', ids.jobId);
       if (ids.correlationId) localStorage.setItem('trazzos_tracked_correlation_id', ids.correlationId);
+      if (ids.uploadId) localStorage.setItem('trazzos_tracked_upload_id', ids.uploadId);
     } catch { /* quota exceeded o SSR */ }
   };
 
@@ -214,6 +214,7 @@ export default function IngestionPage() {
     try {
       localStorage.removeItem('trazzos_tracked_job_id');
       localStorage.removeItem('trazzos_tracked_correlation_id');
+      localStorage.removeItem('trazzos_tracked_upload_id');
     } catch { /* noop */ }
   };
 
@@ -225,12 +226,20 @@ export default function IngestionPage() {
     try {
       const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
       const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
+      const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
       if (savedJobId) {
         setJobId(savedJobId);
         startJobPolling();
       }
       if (savedCorrelationId) {
         console.log('[restore] correlation_id restaurado:', savedCorrelationId);
+      }
+      if (savedUploadId || savedCorrelationId || savedJobId) {
+        setSessionResponse((prev) => prev ?? {
+          upload_id: savedUploadId || undefined,
+          correlation_id: savedCorrelationId || undefined,
+          job_id: savedJobId || undefined,
+        });
       }
     } catch { /* noop */ }
 
@@ -531,7 +540,7 @@ export default function IngestionPage() {
       }
 
       // Persistir en localStorage para sobrevivir recargas de página
-      persistTrackingIds({ jobId: ids.jobId, correlationId: ids.correlationId });
+      persistTrackingIds({ jobId: ids.jobId, correlationId: ids.correlationId, uploadId: ids.uploadId });
       
       const url = extractSignedUrl(data);
       if (url) {
@@ -649,8 +658,27 @@ export default function IngestionPage() {
   const handleConfirm = async () => {
     console.log('[handleConfirm] Iniciando confirmación...');
     setGlobalError(null);
-    
-    if (!sessionResponse) {
+ 
+    // Fallback local: reconstruir sesión desde localStorage si el estado se perdió.
+    let effectiveSession = sessionResponse;
+    if (!effectiveSession) {
+      try {
+        const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
+        const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
+        const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
+        if (savedUploadId || savedCorrelationId || savedJobId) {
+          effectiveSession = {
+            upload_id: savedUploadId || undefined,
+            correlation_id: savedCorrelationId || undefined,
+            job_id: savedJobId || undefined,
+          };
+          setSessionResponse(effectiveSession);
+          console.warn('[handleConfirm] Sesión reconstruida localmente desde localStorage');
+        }
+      } catch { /* noop */ }
+    }
+
+    if (!effectiveSession) {
       const errorMsg = 'Sesión no encontrada. Por favor crea una sesión primero.';
       setErrorConfirm(errorMsg);
       setGlobalError(errorMsg);
@@ -664,7 +692,7 @@ export default function IngestionPage() {
       return;
     }
 
-    const ids = extractIds(sessionResponse);
+    const ids = extractIds(effectiveSession);
     if (!ids.uploadId) {
       const errorMsg = 'Falta upload_id en respuesta de sesión.';
       setErrorConfirm(errorMsg);
@@ -672,7 +700,18 @@ export default function IngestionPage() {
       return;
     }
 
+    // Correlation ID obligatorio para finalize en n8n
+    if (!ids.correlationId) {
+      console.error('ERROR CRÍTICO: ID Perdido');
+      const errorMsg = 'ERROR CRÍTICO: ID Perdido (correlation_id undefined)';
+      setErrorConfirm(errorMsg);
+      setGlobalError(errorMsg);
+      return;
+    }
+
     console.log('[handleConfirm] IDs extraídos:', ids);
+    // Persistir explícitamente ANTES del envío a /upload-confirm
+    persistTrackingIds({ jobId: ids.jobId || jobId, correlationId: ids.correlationId, uploadId: ids.uploadId });
 
     try {
       setLoadingConfirm(true);
@@ -683,29 +722,60 @@ export default function IngestionPage() {
         upload_id: ids.uploadId,
         job_id: ids.jobId || jobId || undefined,
         cluster_id: FIXED_CLUSTER_ID,
-        correlation_id: ids.correlationId || undefined,
+        correlation_id: ids.correlationId,
         user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
       };
 
-      console.log('[handleConfirm] Enviando a /api/workflows/upload-confirm:', payload);
+      if (!payload.job_id) {
+        console.error('ERROR CRÍTICO: job_id undefined en body hacia webhook n8n');
+        const errorMsg = 'ERROR CRÍTICO: job_id undefined';
+        setErrorConfirm(errorMsg);
+        setGlobalError(errorMsg);
+        return;
+      }
+
+      console.log('[handleConfirm] Payload exacto enviado a /api/workflows/upload-confirm:', payload);
 
       let dispatched = false;
 
       try {
-        const response = await fetch('/api/workflows/upload-confirm', {
+        const sendConfirm = async () => fetch('/api/workflows/upload-confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
+
+        let response = await sendConfirm();
 
         console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
         if (response.ok) {
           console.log('[V6 trigger ACK] upload-confirm respondió OK (200-299) para job_id=%s cluster_id=%s', payload.job_id, payload.cluster_id);
         }
 
+        let text = await response.text().catch(() => '');
+
+        // Retry único si hay 500 por sesión faltante
+        if (!response.ok && response.status === 500) {
+          const responseTextLc = (text || '').toLowerCase();
+          const missingSession = responseTextLc.includes('sesión no encontrada')
+            || responseTextLc.includes('sesion no encontrada')
+            || responseTextLc.includes('session not found');
+          if (missingSession) {
+            console.warn('[handleConfirm] 500 por sesión faltante. Reintentando una vez con sesión local...');
+            const recoveredSession = {
+              upload_id: ids.uploadId,
+              correlation_id: ids.correlationId,
+              job_id: ids.jobId || jobId || undefined,
+            };
+            setSessionResponse(recoveredSession);
+            response = await sendConfirm();
+            text = await response.text().catch(() => '');
+            console.log('[handleConfirm] Retry único ->', response.status, response.statusText);
+          }
+        }
+
         if (response.ok) {
-          const text = await response.text().catch(() => '');
           console.log('[handleConfirm] Body completo de respuesta n8n V2:', text);
           try {
             const parsed = text ? JSON.parse(text) : {};
@@ -1052,9 +1122,8 @@ export default function IngestionPage() {
                 {recentJobs.map((job) => {
                   const currentStatus = job.status?.toLowerCase() || '';
                   const isActive = ['running', 'processing', 'pending', 'uploading', 'updating'].includes(currentStatus);
-                  const elapsedMs = job.started_at ? Date.now() - new Date(job.started_at).getTime() : 0;
-                  const canForceComplete = isActive && elapsedMs > 60_000;
-                  const canVerifyState = currentStatus === 'updating' && elapsedMs > 15_000;
+                  const canForceComplete = isActive;
+                  const canVerifyState = currentStatus === 'updating';
 
                   return (
                     <tr key={job.job_id} className="hover:bg-zinc-700/50 transition-colors">
@@ -1065,7 +1134,7 @@ export default function IngestionPage() {
                         {job.job_id.substring(0, 8)}...
                       </td>
                       <td className="px-4 py-3 text-sm text-zinc-400">
-                        {formatDate(job.started_at)}
+                        {'N/A'}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
@@ -1080,7 +1149,7 @@ export default function IngestionPage() {
                               onClick={() => handleForceComplete(job.job_id)}
                               disabled={forcingComplete === job.job_id}
                               className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-md transition-colors text-xs font-medium"
-                              title="Han pasado más de 60s — marcar como completado manualmente"
+                              title="Marcar como completado manualmente"
                             >
                               {forcingComplete === job.job_id ? '…' : 'Forzar cierre'}
                             </button>

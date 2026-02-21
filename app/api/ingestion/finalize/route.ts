@@ -5,7 +5,7 @@ import { supabaseServer } from '../../_lib/supabaseServer';
  * POST /api/ingestion/finalize
  *
  * Webhook que n8n llama (desde V2-06-DB-Update-Job) al terminar el pipeline.
- * Prioriza correlation_id para localizar el job (es lo que n8n genera en V2-01).
+ * Usa job_id como identificador único para localizar el job.
  * Responde 200 lo más rápido posible para que n8n cierre el hilo.
  */
 export async function POST(request: NextRequest) {
@@ -19,39 +19,20 @@ export async function POST(request: NextRequest) {
   }
 
   // Normalizar nombres (n8n puede enviar camelCase o snake_case)
-  const correlationId: string | undefined =
-    body.correlation_id ?? body.correlationId ?? undefined;
   const jobId: string | undefined =
     body.job_id ?? body.jobId ?? undefined;
 
-  console.log('[finalize] ← correlation_id=%s job_id=%s keys=%s', correlationId, jobId, Object.keys(body).join(','));
+  console.log('[finalize] ← job_id=%s keys=%s', jobId, Object.keys(body).join(','));
 
-  if (!correlationId && !jobId) {
-    return Response.json({ ok: false, error: 'Se requiere correlation_id o job_id' }, { status: 400 });
+  if (!jobId) {
+    return Response.json({ ok: false, error: 'Se requiere job_id' }, { status: 400 });
   }
 
-  // Buscar job: correlation_id primero (fuente de verdad de n8n), job_id como fallback
-  let job: any = null;
-
-  if (correlationId) {
-    const { data } = await supabaseServer
-      .from('ingestion_jobs')
-      .select('job_id, status, correlation_id')
-      .eq('correlation_id', correlationId)
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    job = data;
-  }
-
-  if (!job && jobId) {
-    const { data } = await supabaseServer
-      .from('ingestion_jobs')
-      .select('job_id, status, correlation_id')
-      .eq('job_id', jobId)
-      .maybeSingle();
-    job = data;
-  }
+  const { data: job } = await supabaseServer
+    .from('ingestion_jobs')
+    .select('job_id, status')
+    .eq('job_id', jobId)
+    .maybeSingle();
 
   if (!job) {
     console.warn('[finalize] Job no encontrado');
@@ -67,11 +48,10 @@ export async function POST(request: NextRequest) {
   // Determinar status final
   const finalStatus = (body.status === 'error' || body.status === 'failed') ? body.status : 'completed';
 
-  // Mantener el cierre robusto: solo status + updated_at.
+  // Mantener el cierre robusto: solo status.
   // No tocar columnas opcionales para evitar fallos por esquemas distintos.
   const patch: Record<string, any> = {
     status: finalStatus,
-    updated_at: new Date().toISOString(),
   };
 
   const { error: updateErr } = await supabaseServer
