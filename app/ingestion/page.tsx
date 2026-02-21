@@ -17,6 +17,14 @@ interface IngestionJob {
   started_at: string | null;
 }
 
+interface PreparedUpload {
+  fileName: string;
+  contentType: string;
+  body: Blob;
+  originalName: string;
+  wasJsonConverted: boolean;
+}
+
 export default function IngestionPage() {
   // IDs fijos según requerimiento
   const FIXED_COMPANY_ID = 'aaaa1111-1111-4111-a111-111111111111'; // Reficar
@@ -98,6 +106,64 @@ export default function IngestionPage() {
       if (response[key]) return response[key];
     }
     return null;
+  };
+
+  const csvEscape = (value: unknown): string => {
+    const str = String(value ?? '');
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const buildPreparedUpload = async (inputFile: File): Promise<PreparedUpload> => {
+    const ext = inputFile.name.split('.').pop()?.toLowerCase();
+    const isJsonLike = ext === 'json' || ext === 'jsonl';
+
+    if (!isJsonLike) {
+      return {
+        fileName: inputFile.name,
+        contentType: inputFile.type || 'application/octet-stream',
+        body: inputFile,
+        originalName: inputFile.name,
+        wasJsonConverted: false,
+      };
+    }
+
+    const header = 'company_id,item_category,description,quantity,unit,type';
+    let rows: any[] = [];
+
+    if (ext === 'jsonl') {
+      const text = await inputFile.text();
+      rows = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    } else {
+      const parsed = JSON.parse(await inputFile.text());
+      rows = Array.isArray(parsed) ? parsed : [parsed];
+    }
+
+    const csvRows = rows.map((r) =>
+      [
+        csvEscape(r?.company_id),
+        csvEscape(r?.item_category),
+        csvEscape(r?.description),
+        csvEscape(r?.quantity),
+        csvEscape(r?.unit),
+        csvEscape(r?.type),
+      ].join(','),
+    );
+
+    const csv = [header, ...csvRows].join('\n');
+    return {
+      fileName: 'data.csv',
+      contentType: 'text/csv',
+      body: new Blob([csv], { type: 'text/csv' }),
+      originalName: inputFile.name,
+      wasJsonConverted: true,
+    };
   };
 
   // Extraer uploadId de sessionResponse para determinar el estado del botón
@@ -349,7 +415,7 @@ export default function IngestionPage() {
   }, [handleRefreshMarts]);
 
   // Step 1: Create session
-  const handleCreateSession = async () => {
+  const handleCreateSession = async (preparedUpload?: PreparedUpload) => {
     console.log('[handleCreateSession] Iniciando creación de sesión...');
     setGlobalError(null);
     
@@ -397,8 +463,8 @@ export default function IngestionPage() {
       const payload = {
         company_id: finalCompanyId,
         user_id: finalUserId,
-        file_name: file.name,
-        file_type: file.type || 'application/octet-stream',
+        file_name: preparedUpload?.fileName || file.name,
+        file_type: preparedUpload?.contentType || file.type || 'application/octet-stream',
         dataset_type: detectedType,
       };
 
@@ -477,7 +543,7 @@ export default function IngestionPage() {
 
   // Step 2: Upload file
   // urlOverride permite pasar la URL directamente sin esperar el re-render de React
-  const handleUploadFile = async (urlOverride?: string) => {
+  const handleUploadFile = async (urlOverride?: string, preparedUpload?: PreparedUpload) => {
     console.log('[handleUploadFile] Iniciando subida de archivo...');
     setGlobalError(null);
 
@@ -499,10 +565,17 @@ export default function IngestionPage() {
       return false;
     }
 
+    const bodyToUpload = preparedUpload?.body || file;
+    const contentTypeToUpload = preparedUpload?.contentType || file.type || 'application/octet-stream';
+    const uploadName = preparedUpload?.fileName || file.name;
+    const uploadSize = bodyToUpload.size;
+
     console.log('[handleUploadFile] Subiendo archivo:', {
-      name: file.name,
-      size: file.size,
-      type: file.type,
+      name: uploadName,
+      original_name: preparedUpload?.originalName || file.name,
+      size: uploadSize,
+      type: contentTypeToUpload,
+      converted_from_json: Boolean(preparedUpload?.wasJsonConverted),
       signedUrl: targetUrl.substring(0, 50) + '...',
     });
 
@@ -513,9 +586,9 @@ export default function IngestionPage() {
 
       const response = await fetch(targetUrl, {
         method: 'PUT',
-        body: file,
+        body: bodyToUpload,
         headers: {
-          'Content-Type': file.type || 'application/octet-stream',
+          'Content-Type': contentTypeToUpload,
         },
       });
 
@@ -693,8 +766,18 @@ export default function IngestionPage() {
     const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
     
     if (!currentUploadId) {
+      let preparedUpload: PreparedUpload;
+      try {
+        preparedUpload = await buildPreparedUpload(file);
+      } catch (prepErr) {
+        const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
+        console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
+        setGlobalError(`Error preparando archivo: ${msg}`);
+        return;
+      }
+
       // Paso 1: Crear sesión
-      const sessionResult = await handleCreateSession();
+      const sessionResult = await handleCreateSession(preparedUpload);
       
       if (!sessionResult?.signedUrl) {
         console.error('[handleUpload] No se obtuvo signedUrl de la sesión');
@@ -702,7 +785,7 @@ export default function IngestionPage() {
       }
 
       // Paso 2: Subir archivo pasando la URL directamente (evita esperar re-render)
-      const uploadSuccess = await handleUploadFile(sessionResult.signedUrl);
+      const uploadSuccess = await handleUploadFile(sessionResult.signedUrl, preparedUpload);
       if (!uploadSuccess) {
         return;
       }
