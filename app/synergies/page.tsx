@@ -132,7 +132,14 @@ function SynergiesContent() {
         if (!UUID_RE.test(e)) names.push(e);
       } else if (typeof e === 'object' && e !== null) {
         const n = e.name ?? e.company_name ?? e.short_name;
-        if (n && typeof n === 'string') names.push(n);
+        if (n && typeof n === 'string') { names.push(n); continue; }
+        // Fallback: pick first non-UUID string value from the object
+        for (const val of Object.values(e)) {
+          if (typeof val === 'string' && val.length > 0 && !UUID_RE.test(val)) {
+            names.push(val);
+            break;
+          }
+        }
       }
     }
     return names;
@@ -184,8 +191,17 @@ function SynergiesContent() {
       )}
 
       {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 mb-6">
-          <p className="text-red-300">Error: {error}</p>
+        <div className="bg-red-900/20 border border-red-800 rounded-lg p-5 mb-6">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <p className="text-red-200 font-semibold text-sm mb-1">Error en procesamiento de n8n</p>
+              <p className="text-red-300 text-sm">{error}</p>
+              <p className="text-red-400/70 text-xs mt-2">Revise el formato del JSON subido y que el workflow de n8n esté activo.</p>
+            </div>
+          </div>
         </div>
       )}
 
@@ -230,8 +246,9 @@ function SynergiesContent() {
               <tbody className="divide-y divide-zinc-800">
                 {synergies.map((synergy) => {
                   const companies = extractCompanyNames(synergy.companies_involved_json);
+                  const isFailed = ['error', 'failed'].includes(synergy.status?.toLowerCase() ?? '');
                   return (
-                    <tr key={synergy.synergy_id} className="hover:bg-zinc-800/40 transition-colors">
+                    <tr key={synergy.synergy_id} className={`transition-colors ${isFailed ? 'bg-red-900/10 hover:bg-red-900/20' : 'hover:bg-zinc-800/40'}`}>
                       {/* Categoría */}
                       <td className="px-4 py-3">
                         {synergy.item_category ? (
