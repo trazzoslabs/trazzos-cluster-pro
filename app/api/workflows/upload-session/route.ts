@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
         body = {
           company_id: form.get('company_id'),
           user_id: form.get('user_id'),
+          job_id: form.get('job_id'),
           file_name: form.get('file_name') || inboundFile?.name,
           file_type: form.get('file_type') || inboundFile?.type,
           dataset_type: form.get('dataset_type'),
@@ -48,10 +49,14 @@ export async function POST(request: NextRequest) {
       cluster_id: FIXED_CLUSTER_ID,
       dataset_type: isJsonUpload ? 'needs' : isCsvUpload ? 'suppliers' : body?.dataset_type,
     };
+    payload.job_id = payload.job_id || crypto.randomUUID();
 
     // Validate required fields that n8n needs for the hash
     if (!payload.company_id || String(payload.company_id).trim().length === 0) {
       return createErrorResponse('company_id es requerido', 400);
+    }
+    if (!payload.job_id || String(payload.job_id).trim().length === 0) {
+      throw new Error('ERROR CRÍTICO: job_id undefined');
     }
     if (!payload.dataset_type || !['needs', 'suppliers'].includes(payload.dataset_type)) {
       return createErrorResponse(
@@ -68,7 +73,7 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id);
+    console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
     console.log('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
     if (inboundFile) {
       console.log('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
@@ -77,6 +82,7 @@ export async function POST(request: NextRequest) {
     const outboundForm = new FormData();
     outboundForm.append('company_id', String(payload.company_id));
     outboundForm.append('user_id', String(payload.user_id ?? ''));
+    outboundForm.append('job_id', String(payload.job_id));
     outboundForm.append('file_name', String(payload.file_name ?? inboundFile?.name ?? 'data.csv'));
     outboundForm.append('file_type', String(payload.file_type ?? inboundFile?.type ?? 'text/csv'));
     outboundForm.append('dataset_type', String(payload.dataset_type));
@@ -130,7 +136,11 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[upload-session] ← %d OK', response.status);
-    return createSuccessResponse(data, response.status, correlationId);
+    const responseData = {
+      ...(typeof data === 'object' && data !== null ? data : { message: data }),
+      job_id: (data as any)?.job_id || payload.job_id,
+    };
+    return createSuccessResponse(responseData, response.status, correlationId);
   } catch (error) {
     console.error('Unexpected error in POST /api/workflows/upload-session:', error);
     return createErrorResponse('Internal server error', 500);

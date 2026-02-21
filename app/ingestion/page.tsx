@@ -106,6 +106,14 @@ export default function IngestionPage() {
     return null;
   };
 
+  const createClientJobId = (): string => {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+  };
+
   const csvEscape = (value: unknown): string => {
     const str = String(value ?? '');
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
@@ -463,19 +471,26 @@ export default function IngestionPage() {
       const uploadBlob = preparedUpload?.body || file;
       const uploadFileName = preparedUpload?.fileName || file.name;
       const uploadContentType = preparedUpload?.contentType || file.type || 'application/octet-stream';
+      const generatedJobId = createClientJobId();
 
       const formData = new FormData();
       formData.append('file', uploadBlob, uploadFileName);
       formData.append('company_id', finalCompanyId);
       formData.append('user_id', finalUserId);
+      formData.append('job_id', generatedJobId);
       formData.append('file_name', uploadFileName);
       formData.append('file_type', uploadContentType);
       formData.append('dataset_type', detectedType);
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
+      // Respaldo inmediato: persistir job_id justo después de crearlo.
+      persistTrackingIds({ jobId: generatedJobId });
+      setJobId(generatedJobId);
+
       console.log('[handleCreateSession] Enviando request multipart a /api/workflows/upload-session:', {
         company_id: finalCompanyId,
         user_id: finalUserId,
+        job_id: generatedJobId,
         file_name: uploadFileName,
         file_type: uploadContentType,
         dataset_type: detectedType,
@@ -517,14 +532,15 @@ export default function IngestionPage() {
 
       const result = await response.json();
       const data = result.data || result;
+      const dataWithGuaranteedJobId = { ...data, job_id: data?.job_id || generatedJobId };
       
-      console.log('[handleCreateSession] Datos recibidos:', data);
+      console.log('[handleCreateSession] Datos recibidos:', dataWithGuaranteedJobId);
       console.log('%c[V2 Completado] ✓ Sesión creada con éxito — esperando procesamiento de sinergias…', 'color: #9aff8d; font-weight: bold');
       
-      setSessionResponse(data);
+      setSessionResponse(dataWithGuaranteedJobId);
       setSuccessSession(true);
       
-      const ids = extractIds(data);
+      const ids = extractIds(dataWithGuaranteedJobId);
       if (ids.jobId) {
         setJobId(ids.jobId);
         console.log('[handleCreateSession] Job ID extraído:', ids.jobId);
@@ -533,13 +549,13 @@ export default function IngestionPage() {
       // Persistir en localStorage para sobrevivir recargas de página
       persistTrackingIds({ jobId: ids.jobId, uploadId: ids.uploadId });
       
-      const url = extractSignedUrl(data);
+      const url = extractSignedUrl(dataWithGuaranteedJobId);
       if (url) {
         setSignedUrl(url);
         console.log('[handleCreateSession] Signed URL obtenida');
       }
 
-      return { data, signedUrl: url, uploadId: ids.uploadId };
+      return { data: dataWithGuaranteedJobId, signedUrl: url, uploadId: ids.uploadId };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to create session';
       console.error('[handleCreateSession] Error capturado:', err);
