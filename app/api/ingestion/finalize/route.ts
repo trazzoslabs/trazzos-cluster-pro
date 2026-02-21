@@ -67,14 +67,12 @@ export async function POST(request: NextRequest) {
   // Determinar status final
   const finalStatus = (body.status === 'error' || body.status === 'failed') ? body.status : 'completed';
 
+  // Mantener el cierre robusto: solo status + updated_at.
+  // No tocar columnas opcionales para evitar fallos por esquemas distintos.
   const patch: Record<string, any> = {
     status: finalStatus,
-    ended_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
-  if (body.rows_total !== undefined) patch.rows_total = Number(body.rows_total);
-  if (body.rows_ok !== undefined) patch.rows_ok = Number(body.rows_ok);
-  if (body.rows_error !== undefined) patch.rows_error = Number(body.rows_error);
-  if (correlationId && !job.correlation_id) patch.correlation_id = correlationId;
 
   const { error: updateErr } = await supabaseServer
     .from('ingestion_jobs')

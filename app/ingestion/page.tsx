@@ -257,7 +257,7 @@ export default function IngestionPage() {
         jobs.forEach(job => {
           const prev = prevJobStatusRef.current.get(job.job_id);
           const curr = job.status?.toLowerCase();
-          const wasRunning = prev && ['running', 'processing', 'pending', 'uploading'].includes(prev.toLowerCase());
+          const wasRunning = prev && ['running', 'processing', 'pending', 'uploading', 'updating'].includes(prev.toLowerCase());
           if (wasRunning && curr === 'completed') {
             setCompletionToast(`Job ${job.job_id.substring(0, 8)}… completado`);
             handleRefreshMarts();
@@ -272,7 +272,7 @@ export default function IngestionPage() {
         setRecentJobs(jobs);
 
         const hasActive = jobs.some(j =>
-          ['running', 'processing', 'pending', 'uploading'].includes(j.status?.toLowerCase() || '')
+          ['running', 'processing', 'pending', 'uploading', 'updating'].includes(j.status?.toLowerCase() || '')
         );
         if (!hasActive && pollingRef.current) {
           clearInterval(pollingRef.current);
@@ -899,9 +899,11 @@ export default function IngestionPage() {
               </thead>
               <tbody className="divide-y divide-zinc-700">
                 {recentJobs.map((job) => {
-                  const isActive = ['running', 'processing', 'pending', 'uploading'].includes(job.status?.toLowerCase() || '');
+                  const currentStatus = job.status?.toLowerCase() || '';
+                  const isActive = ['running', 'processing', 'pending', 'uploading', 'updating'].includes(currentStatus);
                   const elapsedMs = job.started_at ? Date.now() - new Date(job.started_at).getTime() : 0;
                   const canForceComplete = isActive && elapsedMs > 60_000;
+                  const canVerifyState = currentStatus === 'updating' && elapsedMs > 15_000;
 
                   return (
                     <tr key={job.job_id} className="hover:bg-zinc-700/50 transition-colors">
@@ -930,6 +932,16 @@ export default function IngestionPage() {
                               title="Han pasado más de 60s — marcar como completado manualmente"
                             >
                               {forcingComplete === job.job_id ? '…' : 'Forzar cierre'}
+                            </button>
+                          )}
+                          {canVerifyState && (
+                            <button
+                              onClick={() => fetchRecentJobs()}
+                              disabled={loadingJobs}
+                              className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white rounded-md transition-colors text-xs font-medium"
+                              title="Job en Updating por más de 15s — consultar estado en DB"
+                            >
+                              Verificar Estado
                             </button>
                           )}
                         </div>
