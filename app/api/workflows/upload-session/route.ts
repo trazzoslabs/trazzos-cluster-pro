@@ -7,6 +7,14 @@ const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
 const SESSION_TIMEOUT_MS = 5_000;
 
+const safeLog = (...args: any[]) => {
+  try { console.log(...args); } catch { /* no-op */ }
+};
+
+const safeError = (...args: any[]) => {
+  try { console.error(...args); } catch { /* no-op */ }
+};
+
 export async function POST(request: NextRequest) {
   try {
     if (!N8N_WEBHOOK_BASE) {
@@ -73,10 +81,10 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
-    console.log('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
+    safeLog('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
+    safeLog('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
     if (inboundFile) {
-      console.log('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
+      safeLog('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
     }
 
     const outboundForm = new FormData();
@@ -102,7 +110,7 @@ export async function POST(request: NextRequest) {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[upload-session] n8n no respondió:', msg);
+      safeError('[upload-session] n8n no respondió:', msg);
       if (msg.includes('timeout') || msg.includes('Timeout') || msg.includes('abort')) {
         return createErrorResponse(
           `Conexión con n8n fallida — no hubo respuesta en ${SESSION_TIMEOUT_MS / 1000}s. Verifica que el workflow esté activo.`,
@@ -122,12 +130,12 @@ export async function POST(request: NextRequest) {
         data = text ? { message: text } : {};
       }
     } catch (error) {
-      console.error('[upload-session] Error parsing n8n response:', error);
+      safeError('[upload-session] Error parsing n8n response:', error);
       data = { error: 'Failed to parse response' };
     }
 
     if (!response.ok) {
-      console.error('[upload-session] n8n error %d:', response.status, data);
+      safeError('[upload-session] n8n error %d:', response.status, data);
       return createErrorResponse(
         `n8n workflow failed: ${data.error || data.message || response.statusText}`,
         response.status,
@@ -135,14 +143,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log('[upload-session] ← %d OK', response.status);
+    safeLog('[upload-session] ← %d OK', response.status);
     const responseData = {
       ...(typeof data === 'object' && data !== null ? data : { message: data }),
       job_id: (data as any)?.job_id || payload.job_id,
     };
     return createSuccessResponse(responseData, response.status, correlationId);
   } catch (error) {
-    console.error('Unexpected error in POST /api/workflows/upload-session:', error);
+    safeError('Unexpected error in POST /api/workflows/upload-session:', error);
     return createErrorResponse('Internal server error', 500);
   }
 }

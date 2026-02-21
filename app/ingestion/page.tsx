@@ -707,7 +707,7 @@ export default function IngestionPage() {
 
     console.log('[handleConfirm] IDs extraídos:', ids);
     // Persistir explícitamente ANTES del envío a /upload-confirm
-    const canonicalJobId = ids.jobId || jobId || localStorage.getItem('trazzos_tracked_job_id') || undefined;
+    const canonicalJobId = ids.jobId || jobId || localStorage.getItem('trazzos_tracked_job_id') || createClientJobId();
     persistTrackingIds({ jobId: canonicalJobId, uploadId: ids.uploadId });
 
     try {
@@ -828,60 +828,68 @@ export default function IngestionPage() {
   // Función unificada para manejar el submit del formulario
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('[handleUpload] Formulario enviado');
-    setGlobalError(null);
-    
-    // Validar archivo primero
-    if (!file) {
-      const errorMsg = 'Por favor selecciona un archivo';
-      console.error('[handleUpload] Error:', errorMsg);
-      setGlobalError(errorMsg);
-      return;
-    }
-
-    // Validar tipo de archivo
-    const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
-    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
-    if (!validExtensions.includes(fileExtension)) {
-      const errorMsg = `Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`;
-      console.error('[handleUpload] Error:', errorMsg);
-      setGlobalError(errorMsg);
-      return;
-    }
-
-    const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
-    
-    if (!currentUploadId) {
-      let preparedUpload: PreparedUpload;
-      try {
-        preparedUpload = await buildPreparedUpload(file);
-      } catch (prepErr) {
-        const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
-        console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
-        setGlobalError(`Error preparando archivo: ${msg}`);
-        return;
-      }
-
-      // Paso 1: Crear sesión
-      const sessionResult = await handleCreateSession(preparedUpload);
+    try {
+      console.log('[handleUpload] Formulario enviado');
+      setGlobalError(null);
       
-      if (!sessionResult?.signedUrl) {
-        console.error('[handleUpload] No se obtuvo signedUrl de la sesión');
+      // Validar archivo primero
+      if (!file) {
+        const errorMsg = 'Por favor selecciona un archivo';
+        console.error('[handleUpload] Error:', errorMsg);
+        setGlobalError(errorMsg);
         return;
       }
 
-      // Paso 2: Subir archivo pasando la URL directamente (evita esperar re-render)
-      const uploadSuccess = await handleUploadFile(sessionResult.signedUrl, preparedUpload);
-      if (!uploadSuccess) {
+      // Validar tipo de archivo
+      const validExtensions = ['.csv', '.json', '.jsonl', '.xlsx'];
+      const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+      if (!validExtensions.includes(fileExtension)) {
+        const errorMsg = `Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`;
+        console.error('[handleUpload] Error:', errorMsg);
+        setGlobalError(errorMsg);
         return;
       }
 
-      // Paso 3 (automático): Confirmar inmediatamente para disparar V6
-      console.log('[handleUpload] Upload exitoso; disparando automáticamente /api/workflows/upload-confirm para activar V6');
-      await handleConfirm();
-    } else if (currentUploadId && !isConfirmed && successUpload) {
-      // Paso 3: Confirmar (solo si el archivo ya se subió)
-      await handleConfirm();
+      const currentUploadId = sessionResponse ? extractIds(sessionResponse).uploadId : null;
+      
+      if (!currentUploadId) {
+        let preparedUpload: PreparedUpload;
+        try {
+          preparedUpload = await buildPreparedUpload(file);
+        } catch (prepErr) {
+          const msg = prepErr instanceof Error ? prepErr.message : 'No se pudo convertir el JSON a CSV';
+          console.error('[handleUpload] Error preparando archivo para subida:', prepErr);
+          setGlobalError(`Error preparando archivo: ${msg}`);
+          return;
+        }
+
+        // Paso 1: Crear sesión
+        const sessionResult = await handleCreateSession(preparedUpload);
+        
+        if (!sessionResult?.signedUrl) {
+          console.error('[handleUpload] No se obtuvo signedUrl de la sesión');
+          return;
+        }
+
+        // Paso 2: Subir archivo pasando la URL directamente (evita esperar re-render)
+        const uploadSuccess = await handleUploadFile(sessionResult.signedUrl, preparedUpload);
+        if (!uploadSuccess) {
+          return;
+        }
+
+        // Paso 3 (automático): Confirmar inmediatamente para disparar V6
+        alert('Iniciando Fase 2');
+        console.log('[handleUpload] Upload exitoso; disparando automáticamente /api/workflows/upload-confirm para activar V6');
+        await handleConfirm();
+      } else if (currentUploadId && !isConfirmed && successUpload) {
+        // Paso 3: Confirmar (solo si el archivo ya se subió)
+        alert('Iniciando Fase 2');
+        await handleConfirm();
+      }
+    } catch (err) {
+      console.error('[handleUpload] ERROR GLOBAL:', err);
+      const errorMsg = err instanceof Error ? err.message : 'Error inesperado en la carga';
+      setGlobalError(errorMsg);
     }
   };
 
