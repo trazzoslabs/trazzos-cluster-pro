@@ -3,6 +3,7 @@ import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '..
 import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
@@ -18,8 +19,8 @@ const safeError = (...args: any[]) => {
 
 export async function POST(request: NextRequest) {
   try {
-    if (!N8N_WEBHOOK_BASE) {
-      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
+    if (!N8N_WEBHOOK_BASE && !N8N_WEBHOOK_URL) {
+      return createErrorResponse('N8N_WEBHOOK_BASE or N8N_WEBHOOK_URL environment variable is not set', 500);
     }
 
     const contentType = request.headers.get('content-type') || '';
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500);
     }
 
-    const url = `${N8N_WEBHOOK_BASE}/api/upload/session`;
+    const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
 
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
     if (N8N_WEBHOOK_TOKEN && !N8N_WEBHOOK_TOKEN.startsWith('http')) {
@@ -107,17 +108,20 @@ export async function POST(request: NextRequest) {
       },
     };
 
-    safeLog('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
+    const n8nUrl = `${webhookBaseUrl}?job_id=${generatedJobId}&id=${generatedJobId}`;
+
+    safeLog('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s job_id=%s', n8nUrl, payload.dataset_type, payload.company_id, payload.cluster_id, payload.job_id);
     safeLog('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
     if (inboundFile) {
       safeLog('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
     }
 
+    console.log('Llamando a n8n vía URL:', n8nUrl);
     console.log('Cuerpo enviado a n8n:', JSON.stringify(payload));
 
     let response: Response;
     try {
-      response = await fetchWithTimeout(url, {
+      response = await fetchWithTimeout(n8nUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
