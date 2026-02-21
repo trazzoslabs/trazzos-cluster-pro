@@ -13,11 +13,29 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
     }
 
-    let body;
+    const contentType = request.headers.get('content-type') || '';
+    const isMultipart = contentType.includes('multipart/form-data');
+
+    let body: Record<string, any> = {};
+    let inboundFile: File | null = null;
     try {
-      body = await request.json();
-    } catch (error) {
-      return createErrorResponse('Invalid JSON in request body', 400);
+      if (isMultipart) {
+        const form = await request.formData();
+        inboundFile = (form.get('file') as File) || null;
+        body = {
+          company_id: form.get('company_id'),
+          user_id: form.get('user_id'),
+          file_name: form.get('file_name') || inboundFile?.name,
+          file_type: form.get('file_type') || inboundFile?.type,
+          dataset_type: form.get('dataset_type'),
+          cluster_id: form.get('cluster_id'),
+          correlation_id: form.get('correlation_id'),
+        };
+      } else {
+        body = await request.json();
+      }
+    } catch {
+      return createErrorResponse('Invalid request body', 400);
     }
 
     const fileName = String(body?.file_name ?? '').toLowerCase();
@@ -25,8 +43,8 @@ export async function POST(request: NextRequest) {
     const isCsvUpload = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
 
     // Normalize payload before forwarding to n8n
-    const payload = {
-      ...body,
+    const payload: Record<string, any> = {
+      ...(body as Record<string, any>),
       cluster_id: FIXED_CLUSTER_ID,
       dataset_type: isJsonUpload ? 'needs' : isCsvUpload ? 'suppliers' : body?.dataset_type,
     };
@@ -45,20 +63,35 @@ export async function POST(request: NextRequest) {
     const correlationId = payload?.correlation_id;
     const url = `${N8N_WEBHOOK_BASE}/api/upload/session`;
 
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    const headers: HeadersInit = {};
     if (N8N_WEBHOOK_TOKEN && !N8N_WEBHOOK_TOKEN.startsWith('http')) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
     console.log('[upload-session] → POST %s  dataset_type=%s company_id=%s cluster_id=%s', url, payload.dataset_type, payload.company_id, payload.cluster_id);
     console.log('[upload-session] payload JSON exacto a n8n: %s', JSON.stringify(payload));
+    if (inboundFile) {
+      console.log('[upload-session] archivo multipart recibido: %s (%d bytes)', inboundFile.name, inboundFile.size);
+    }
+
+    const outboundForm = new FormData();
+    outboundForm.append('company_id', String(payload.company_id));
+    outboundForm.append('user_id', String(payload.user_id ?? ''));
+    outboundForm.append('file_name', String(payload.file_name ?? inboundFile?.name ?? 'data.csv'));
+    outboundForm.append('file_type', String(payload.file_type ?? inboundFile?.type ?? 'text/csv'));
+    outboundForm.append('dataset_type', String(payload.dataset_type));
+    outboundForm.append('cluster_id', String(payload.cluster_id));
+    if (payload.correlation_id) outboundForm.append('correlation_id', String(payload.correlation_id));
+    if (inboundFile) {
+      outboundForm.append('file', inboundFile, inboundFile.name);
+    }
 
     let response: Response;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload),
+        body: outboundForm,
         timeout: SESSION_TIMEOUT_MS,
       });
     } catch (err) {

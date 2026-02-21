@@ -29,6 +29,7 @@ export default function IngestionPage() {
   // IDs fijos según requerimiento
   const FIXED_COMPANY_ID = 'aaaa1111-1111-4111-a111-111111111111'; // Reficar
   const FIXED_USER_ID = 'bff82884-0263-4bc1-8895-3567c2c02b55';
+  const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
   // Form inputs
   const [companyId, setCompanyId] = useState<string>(FIXED_COMPANY_ID);
@@ -458,17 +459,29 @@ export default function IngestionPage() {
       setErrorSession(null);
       setSuccessSession(false);
 
-      const detectedType = inferDatasetType(file);
+      const detectedType = preparedUpload?.wasJsonConverted ? 'needs' : inferDatasetType(file);
+      const uploadBlob = preparedUpload?.body || file;
+      const uploadFileName = preparedUpload?.fileName || file.name;
+      const uploadContentType = preparedUpload?.contentType || file.type || 'application/octet-stream';
 
-      const payload = {
+      const formData = new FormData();
+      formData.append('file', uploadBlob, uploadFileName);
+      formData.append('company_id', finalCompanyId);
+      formData.append('user_id', finalUserId);
+      formData.append('file_name', uploadFileName);
+      formData.append('file_type', uploadContentType);
+      formData.append('dataset_type', detectedType);
+      formData.append('cluster_id', FIXED_CLUSTER_ID);
+
+      console.log('[handleCreateSession] Enviando request multipart a /api/workflows/upload-session:', {
         company_id: finalCompanyId,
         user_id: finalUserId,
-        file_name: preparedUpload?.fileName || file.name,
-        file_type: preparedUpload?.contentType || file.type || 'application/octet-stream',
+        file_name: uploadFileName,
+        file_type: uploadContentType,
         dataset_type: detectedType,
-      };
-
-      console.log('[handleCreateSession] Enviando request a /api/workflows/upload-session:', payload);
+        cluster_id: FIXED_CLUSTER_ID,
+      });
+      console.log('Enviando FormData con archivo de', uploadBlob.size, 'bytes');
 
       const controller = new AbortController();
       const uiTimeout = setTimeout(() => controller.abort(), 8_000);
@@ -477,8 +490,7 @@ export default function IngestionPage() {
       try {
         response = await fetch('/api/workflows/upload-session', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: formData,
           signal: controller.signal,
         });
       } catch (fetchErr: any) {
