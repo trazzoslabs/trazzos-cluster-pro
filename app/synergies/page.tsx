@@ -110,45 +110,57 @@ function SynergiesContent() {
     }
   };
 
-  const formatVolume = (volumeJson: any) => {
-    if (!volumeJson) return 'N/A';
+  /** Extract a single human-readable number + unit from volume_total_json */
+  const formatVolume = (volumeJson: any): string => {
+    if (volumeJson == null) return '—';
     if (typeof volumeJson === 'number') return volumeJson.toLocaleString('es-CO');
-    if (typeof volumeJson === 'object') {
-      const total = volumeJson.total ?? volumeJson.total_units ?? volumeJson.quantity;
-      const uom = volumeJson.uom ?? volumeJson.unit ?? '';
-      if (total !== undefined) {
-        return `${Number(total).toLocaleString('es-CO')}${uom ? ` ${uom}` : ''}`;
-      }
-      const entries = Object.entries(volumeJson).slice(0, 3);
-      if (entries.length === 0) return 'N/A';
-      return entries.map(([k, v]) => `${k}: ${v}`).join(', ');
+    if (typeof volumeJson === 'string') {
+      const n = Number(volumeJson);
+      return isNaN(n) ? volumeJson : n.toLocaleString('es-CO');
     }
-    return String(volumeJson);
+    if (typeof volumeJson === 'object') {
+      const total = volumeJson.total ?? volumeJson.total_units ?? volumeJson.quantity ?? volumeJson.amount ?? volumeJson.value;
+      const uom = volumeJson.uom ?? volumeJson.unit ?? volumeJson.currency ?? '';
+      if (total !== undefined && total !== null) {
+        const num = Number(total);
+        const formatted = isNaN(num) ? String(total) : num.toLocaleString('es-CO');
+        return uom ? `${formatted} ${uom}` : formatted;
+      }
+      // Fallback: pick first numeric-looking value
+      for (const [, v] of Object.entries(volumeJson)) {
+        if (typeof v === 'number') return v.toLocaleString('es-CO');
+        if (typeof v === 'string' && !isNaN(Number(v))) return Number(v).toLocaleString('es-CO');
+      }
+      return '—';
+    }
+    return '—';
   };
 
-  const formatCompanies = (companiesJson: any): string => {
-    if (!companiesJson) return 'N/A';
-
-    const extractName = (entry: any): string => {
-      if (typeof entry === 'string') return entry;
-      if (typeof entry === 'object' && entry !== null) {
-        return entry.name ?? entry.company_name ?? entry.company_id ?? JSON.stringify(entry);
+  /** Extract a flat list of company name strings from companies_involved_json */
+  const extractCompanyNames = (companiesJson: any): string[] => {
+    const pick = (entry: any): string | null => {
+      if (!entry) return null;
+      if (typeof entry === 'string') {
+        // Skip UUIDs that look like raw IDs if a name exists elsewhere
+        return entry;
       }
-      return String(entry);
+      if (typeof entry === 'object') {
+        return entry.name ?? entry.company_name ?? entry.short_name ?? null;
+      }
+      return null;
     };
 
-    if (Array.isArray(companiesJson)) {
-      return companiesJson.map(extractName).join(', ');
+    let raw = companiesJson;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch { return [raw]; }
     }
-    if (typeof companiesJson === 'string') {
-      try {
-        const parsed = JSON.parse(companiesJson);
-        if (Array.isArray(parsed)) return parsed.map(extractName).join(', ');
-        return extractName(parsed);
-      } catch { /* not JSON */ }
-      return companiesJson;
+
+    if (Array.isArray(raw)) {
+      return raw.map(pick).filter((n): n is string => !!n);
     }
-    return extractName(companiesJson);
+
+    const name = pick(raw);
+    return name ? [name] : [];
   };
 
   return (
@@ -201,60 +213,109 @@ function SynergiesContent() {
       )}
 
       {!loading && !error && synergies.length > 0 && (
-        <SectionCard title="Sinergias">
+        <SectionCard title="Sinergias detectadas">
+          {/* Resumen */}
+          <div className="flex flex-wrap gap-4 mb-5 text-sm">
+            <div className="bg-zinc-800/60 rounded-lg px-4 py-2">
+              <span className="text-zinc-400">Total:</span>{' '}
+              <span className="text-white font-semibold">{synergies.length}</span>
+            </div>
+            <div className="bg-zinc-800/60 rounded-lg px-4 py-2">
+              <span className="text-zinc-400">Categorías:</span>{' '}
+              <span className="text-white font-semibold">
+                {new Set(synergies.map(s => s.item_category).filter(Boolean)).size}
+              </span>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-zinc-900">
-                <tr>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Categoría</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Empresas</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Ventana Inicio</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Ventana Fin</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Volumen Total</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Status</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Acción</th>
+              <thead>
+                <tr className="border-b border-zinc-700">
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider">Categoría</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider">Empresas Involucradas</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider">Ventana</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wider">Volumen Total</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-zinc-400 uppercase tracking-wider">Estado</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wider">Acción</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-700">
-                {synergies.map((synergy) => (
-                  <tr key={synergy.synergy_id} className="hover:bg-zinc-700/50 transition-colors">
-                    <td className="px-4 py-3 text-sm text-white font-medium">
-                      {synergy.item_category || <span className="text-zinc-600 italic">sin categoría</span>}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400 max-w-[200px]">
-                      {formatCompanies(synergy.companies_involved_json)}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400">
-                      {synergy.window_start ? formatDate(synergy.window_start) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400">
-                      {synergy.window_end ? formatDate(synergy.window_end) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-zinc-400">
-                      {formatVolume(synergy.volume_total_json)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={synergy.status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleCreateRfp(synergy.synergy_id)}
-                          disabled={creatingRfp === synergy.synergy_id}
-                          className="px-3 py-1.5 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors text-sm font-medium disabled:cursor-not-allowed"
-                        >
-                          {creatingRfp === synergy.synergy_id ? 'Creando...' : 'Crear RFP'}
-                        </button>
-                        <Link
-                          href={`/rfps?synergy_id=${synergy.synergy_id}`}
-                          className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-md transition-colors text-sm font-medium"
-                        >
-                          Ver RFPs
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-zinc-800">
+                {synergies.map((synergy) => {
+                  const companies = extractCompanyNames(synergy.companies_involved_json);
+                  return (
+                    <tr key={synergy.synergy_id} className="hover:bg-zinc-800/40 transition-colors">
+                      {/* Categoría */}
+                      <td className="px-4 py-3">
+                        {synergy.item_category ? (
+                          <span className="text-sm text-white font-medium">{synergy.item_category}</span>
+                        ) : (
+                          <span className="text-sm text-zinc-600 italic">sin categoría</span>
+                        )}
+                      </td>
+
+                      {/* Empresas — pill tags */}
+                      <td className="px-4 py-3">
+                        {companies.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {companies.map((name, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-[#9aff8d]/10 text-[#9aff8d] border border-[#9aff8d]/20"
+                              >
+                                {name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-zinc-600">—</span>
+                        )}
+                      </td>
+
+                      {/* Ventana (inicio – fin combinados) */}
+                      <td className="px-4 py-3 text-sm text-zinc-400 whitespace-nowrap">
+                        {synergy.window_start || synergy.window_end ? (
+                          <>
+                            {synergy.window_start ? formatDate(synergy.window_start) : '?'}
+                            {' → '}
+                            {synergy.window_end ? formatDate(synergy.window_end) : '?'}
+                          </>
+                        ) : '—'}
+                      </td>
+
+                      {/* Volumen */}
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-sm text-white font-mono">
+                          {formatVolume(synergy.volume_total_json)}
+                        </span>
+                      </td>
+
+                      {/* Estado */}
+                      <td className="px-4 py-3 text-center">
+                        <StatusBadge status={synergy.status} />
+                      </td>
+
+                      {/* Acciones */}
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleCreateRfp(synergy.synergy_id)}
+                            disabled={creatingRfp === synergy.synergy_id}
+                            className="px-3 py-1.5 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors text-xs font-semibold disabled:cursor-not-allowed"
+                          >
+                            {creatingRfp === synergy.synergy_id ? 'Creando...' : 'Crear RFP'}
+                          </button>
+                          <Link
+                            href={`/rfps?synergy_id=${synergy.synergy_id}`}
+                            className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-md transition-colors text-xs font-medium"
+                          >
+                            Ver RFPs
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

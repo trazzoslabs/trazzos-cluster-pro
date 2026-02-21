@@ -3,8 +3,8 @@ interface StatusBadgeProps {
 }
 
 const GREEN = new Set(['completed', 'approved', 'created', 'submitted', 'success', 'done', 'finished', 'stored']);
-const BLUE  = new Set(['running', 'processing', 'uploading', 'in_progress', 'active']);
-const AMBER = new Set(['pending', 'draft', 'awaiting_mapping', 'analyzed', 'queued', 'rfp']);
+const BLUE  = new Set(['running', 'processing', 'uploading', 'in_progress', 'active', 'detected', 'identified', 'matched']);
+const AMBER = new Set(['pending', 'draft', 'awaiting_mapping', 'analyzed', 'queued', 'rfp', 'review', 'open']);
 const RED   = new Set(['error', 'failed', 'rejected', 'cancelled']);
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
