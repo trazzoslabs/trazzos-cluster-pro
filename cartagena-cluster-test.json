@@ -1,0 +1,34 @@
+[
+  {
+    "company_id": "aaaa1111-1111-4111-a111-111111111111",
+    "item_category": "Energía/Vapor",
+    "description": "Excedente de vapor de alta presión",
+    "quantity": 5000,
+    "unit": "kg/h",
+    "type": "offering"
+  },
+  {
+    "company_id": "aaaa1111-1111-4111-a111-111111111111",
+    "item_category": "Energía/Vapor",
+    "description": "Excedente de vapor de media presión",
+    "quantity": 3200,
+    "unit": "kg/h",
+    "type": "offering"
+  },
+  {
+    "company_id": "aaaa2222-2222-4222-a222-222222222222",
+    "item_category": "Energía/Vapor",
+    "description": "Necesidad de vapor para proceso de granulación",
+    "quantity": 2800,
+    "unit": "kg/h",
+    "type": "need"
+  },
+  {
+    "company_id": "aaaa3333-3333-4333-a333-333333333333",
+    "item_category": "Energía/Vapor",
+    "description": "Necesidad de vapor para secado de clinker",
+    "quantity": 3500,
+    "unit": "kg/h",
+    "type": "need"
+  }
+]

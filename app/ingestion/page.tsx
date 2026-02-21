@@ -32,6 +32,8 @@ export default function IngestionPage() {
   /** n8n only accepts "needs" or "suppliers". Auto-detect from file extension. */
   const inferDatasetType = (f: File | null): 'needs' | 'suppliers' => {
     if (!f) return 'needs';
+    // Regla explícita para pruebas de seed solicitadas por negocio.
+    if (f.name.toLowerCase() === 'data_prueba_limpia.json') return 'needs';
     const ext = f.name.split('.').pop()?.toLowerCase();
     if (ext === 'csv' || ext === 'xlsx') return 'suppliers';
     return 'needs'; // .json, .jsonl → needs
@@ -131,6 +133,7 @@ export default function IngestionPage() {
   const [forcingComplete, setForcingComplete] = useState<string | null>(null);
   const prevJobStatusRef = useRef<Map<string, string | null>>(new Map());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persistir / restaurar correlation_id y jobId en localStorage
   const persistTrackingIds = (ids: { jobId?: string | null; correlationId?: string | null }) => {
@@ -166,6 +169,7 @@ export default function IngestionPage() {
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
+      if (autoCompleteTimeoutRef.current) clearTimeout(autoCompleteTimeoutRef.current);
     };
   }, []);
 
@@ -262,6 +266,10 @@ export default function IngestionPage() {
             setCompletionToast(`Job ${job.job_id.substring(0, 8)}… completado`);
             handleRefreshMarts();
             clearTrackingIds();
+            if (autoCompleteTimeoutRef.current) {
+              clearTimeout(autoCompleteTimeoutRef.current);
+              autoCompleteTimeoutRef.current = null;
+            }
             setTimeout(() => setCompletionToast(null), 8000);
           }
         });
@@ -307,6 +315,36 @@ export default function IngestionPage() {
       setGlobalError('Error de red al forzar completado');
     } finally {
       setForcingComplete(null);
+    }
+  }, [handleRefreshMarts]);
+
+  const autoCompleteIfStuck = useCallback(async (targetJobId: string) => {
+    try {
+      // Verificar estado actual antes de forzar cierre
+      const res = await fetch('/api/data/ingestion-jobs');
+      if (!res.ok) return;
+      const payload = await res.json().catch(() => ({}));
+      const jobs: IngestionJob[] = (payload.data || []).slice(0, 50);
+      const target = jobs.find(j => j.job_id === targetJobId);
+      const curr = target?.status?.toLowerCase() || '';
+      const stillActive = ['running', 'processing', 'pending', 'uploading', 'updating'].includes(curr);
+      if (!stillActive) return;
+
+      console.warn('[autoCompleteIfStuck] Job sigue activo tras 10s, cerrando manualmente:', targetJobId, curr);
+      const patch = await fetch('/api/data/ingestion-jobs', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: targetJobId }),
+      });
+      if (patch.ok) {
+        setCompletionToast(`Job ${targetJobId.substring(0, 8)}… marcado como completado (fallback 10s)`);
+        clearTrackingIds();
+        fetchRecentJobs();
+        handleRefreshMarts();
+        setTimeout(() => setCompletionToast(null), 8000);
+      }
+    } catch (err) {
+      console.warn('[autoCompleteIfStuck] No se pudo aplicar cierre automático:', err);
     }
   }, [handleRefreshMarts]);
 
@@ -605,6 +643,16 @@ export default function IngestionPage() {
         fetchRecentJobs();
         startJobPolling();
         scheduleDelayedRefresh();
+
+        // Fallback de robustez: si 10s después de V2 el job sigue activo,
+        // cerrarlo manualmente para evitar bloqueo de UI.
+        const fallbackJobId = ids.jobId || jobId;
+        if (fallbackJobId) {
+          if (autoCompleteTimeoutRef.current) clearTimeout(autoCompleteTimeoutRef.current);
+          autoCompleteTimeoutRef.current = setTimeout(() => {
+            autoCompleteIfStuck(fallbackJobId);
+          }, 10_000);
+        }
       }
 
     } catch (err) {
