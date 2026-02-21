@@ -90,12 +90,10 @@ export default function IngestionPage() {
   const extractIds = (response: SessionResponse) => {
     const jobIdKeys = ['job_id', 'jobId', 'jobId'];
     const uploadIdKeys = ['upload_id', 'uploadId', 'uploadId'];
-    const correlationIdKeys = ['correlation_id', 'correlationId', 'correlationId'];
     const hashKeys = ['hash', 'payload_hash', 'payload_hash_sha256'];
     return {
       jobId: findNestedValue(response, jobIdKeys),
       uploadId: findNestedValue(response, uploadIdKeys),
-      correlationId: findNestedValue(response, correlationIdKeys),
       hash: findNestedValue(response, hashKeys),
     };
   };
@@ -202,10 +200,9 @@ export default function IngestionPage() {
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
-  const persistTrackingIds = (ids: { jobId?: string | null; correlationId?: string | null; uploadId?: string | null }) => {
+  const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null }) => {
     try {
       if (ids.jobId) localStorage.setItem('trazzos_tracked_job_id', ids.jobId);
-      if (ids.correlationId) localStorage.setItem('trazzos_tracked_correlation_id', ids.correlationId);
       if (ids.uploadId) localStorage.setItem('trazzos_tracked_upload_id', ids.uploadId);
     } catch { /* quota exceeded o SSR */ }
   };
@@ -213,7 +210,6 @@ export default function IngestionPage() {
   const clearTrackingIds = () => {
     try {
       localStorage.removeItem('trazzos_tracked_job_id');
-      localStorage.removeItem('trazzos_tracked_correlation_id');
       localStorage.removeItem('trazzos_tracked_upload_id');
     } catch { /* noop */ }
   };
@@ -225,19 +221,14 @@ export default function IngestionPage() {
 
     try {
       const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
-      const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
       const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
       if (savedJobId) {
         setJobId(savedJobId);
         startJobPolling();
       }
-      if (savedCorrelationId) {
-        console.log('[restore] correlation_id restaurado:', savedCorrelationId);
-      }
-      if (savedUploadId || savedCorrelationId || savedJobId) {
+      if (savedUploadId || savedJobId) {
         setSessionResponse((prev) => prev ?? {
           upload_id: savedUploadId || undefined,
-          correlation_id: savedCorrelationId || undefined,
           job_id: savedJobId || undefined,
         });
       }
@@ -540,7 +531,7 @@ export default function IngestionPage() {
       }
 
       // Persistir en localStorage para sobrevivir recargas de página
-      persistTrackingIds({ jobId: ids.jobId, correlationId: ids.correlationId, uploadId: ids.uploadId });
+      persistTrackingIds({ jobId: ids.jobId, uploadId: ids.uploadId });
       
       const url = extractSignedUrl(data);
       if (url) {
@@ -664,12 +655,10 @@ export default function IngestionPage() {
     if (!effectiveSession) {
       try {
         const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
-        const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
         const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
-        if (savedUploadId || savedCorrelationId || savedJobId) {
+        if (savedUploadId || savedJobId) {
           effectiveSession = {
             upload_id: savedUploadId || undefined,
-            correlation_id: savedCorrelationId || undefined,
             job_id: savedJobId || undefined,
           };
           setSessionResponse(effectiveSession);
@@ -700,18 +689,10 @@ export default function IngestionPage() {
       return;
     }
 
-    // Correlation ID obligatorio para finalize en n8n
-    if (!ids.correlationId) {
-      console.error('ERROR CRÍTICO: ID Perdido');
-      const errorMsg = 'ERROR CRÍTICO: ID Perdido (correlation_id undefined)';
-      setErrorConfirm(errorMsg);
-      setGlobalError(errorMsg);
-      return;
-    }
-
     console.log('[handleConfirm] IDs extraídos:', ids);
     // Persistir explícitamente ANTES del envío a /upload-confirm
-    persistTrackingIds({ jobId: ids.jobId || jobId, correlationId: ids.correlationId, uploadId: ids.uploadId });
+    const canonicalJobId = ids.jobId || jobId || localStorage.getItem('trazzos_tracked_job_id') || undefined;
+    persistTrackingIds({ jobId: canonicalJobId, uploadId: ids.uploadId });
 
     try {
       setLoadingConfirm(true);
@@ -720,9 +701,8 @@ export default function IngestionPage() {
 
       const payload = {
         upload_id: ids.uploadId,
-        job_id: ids.jobId || jobId || undefined,
+        job_id: canonicalJobId,
         cluster_id: FIXED_CLUSTER_ID,
-        correlation_id: ids.correlationId,
         user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
       };
@@ -751,6 +731,11 @@ export default function IngestionPage() {
         console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
         if (response.ok) {
           console.log('[V6 trigger ACK] upload-confirm respondió OK (200-299) para job_id=%s cluster_id=%s', payload.job_id, payload.cluster_id);
+          try {
+            const bc = new BroadcastChannel('trazzos_marts');
+            bc.postMessage({ type: 'n8n_v2_ok', ts: Date.now(), job_id: payload.job_id });
+            bc.close();
+          } catch { /* BroadcastChannel no soportado */ }
         }
 
         let text = await response.text().catch(() => '');
@@ -765,8 +750,7 @@ export default function IngestionPage() {
             console.warn('[handleConfirm] 500 por sesión faltante. Reintentando una vez con sesión local...');
             const recoveredSession = {
               upload_id: ids.uploadId,
-              correlation_id: ids.correlationId,
-              job_id: ids.jobId || jobId || undefined,
+              job_id: canonicalJobId,
             };
             setSessionResponse(recoveredSession);
             response = await sendConfirm();

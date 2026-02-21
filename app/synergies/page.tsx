@@ -61,6 +61,29 @@ function SynergiesContent() {
     fetchSynergies();
   }, [clusterId]);
 
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('trazzos_marts');
+      bc.onmessage = (event) => {
+        const msg = event?.data;
+        if (msg?.type === 'n8n_v2_ok') {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            router.refresh();
+          }, 3_000);
+        }
+      };
+    } catch {
+      // Browser sin BroadcastChannel
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (bc) bc.close();
+    };
+  }, [router]);
+
   const handleCreateRfp = async (synergyId: string) => {
     try {
       setCreatingRfp(synergyId);

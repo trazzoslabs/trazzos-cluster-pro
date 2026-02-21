@@ -11,50 +11,24 @@ export async function GET(request: NextRequest) {
       return createErrorResponse('job_id query parameter is required', 400);
     }
 
-    // Get job info to determine dataset_type
-    const { data: job, error: jobError } = await supabaseServer
-      .from('ingestion_jobs')
-      .select('job_id, upload_id')
-      .eq('job_id', jobId)
-      .maybeSingle();
+    // Determinar tabla staging sin depender de columnas extra en ingestion_jobs.
+    const tableCandidates = ['stg_needs_rows', 'stg_shutdowns_rows'];
+    let stagingTable: string | null = null;
 
-    if (jobError) {
-      console.error('Error fetching job:', jobError);
-      return createErrorResponse('Failed to fetch job', 500);
-    }
-
-    if (!job) {
-      return createErrorResponse('Job not found', 404);
-    }
-
-    // Get upload to determine dataset_type
-    let datasetType: string | null = null;
-    if (job.upload_id) {
-      const { data: upload, error: uploadError } = await supabaseServer
-        .from('uploads')
-        .select('declared_dataset_type')
-        .eq('upload_id', job.upload_id)
-        .maybeSingle();
-
-      if (uploadError) {
-        console.error('Error fetching upload:', uploadError);
-      } else if (upload) {
-        datasetType = upload.declared_dataset_type;
+    for (const tableName of tableCandidates) {
+      const { data, error } = await supabaseServer
+        .from(tableName)
+        .select('job_id')
+        .eq('job_id', jobId)
+        .limit(1);
+      if (!error && data && data.length > 0) {
+        stagingTable = tableName;
+        break;
       }
     }
 
-    // Determine which staging table to query
-    let stagingTable: string;
-    if (datasetType === 'shutdowns') {
-      stagingTable = 'stg_shutdowns_rows';
-    } else if (datasetType === 'needs') {
-      stagingTable = 'stg_needs_rows';
-    } else if (datasetType === 'suppliers') {
-      // Suppliers might not have staging table, return empty for now
+    if (!stagingTable) {
       return createSuccessResponse([]);
-    } else {
-      // Try to detect from data
-      stagingTable = 'stg_shutdowns_rows';
     }
 
     // Get a sample row to extract columns
