@@ -1,15 +1,17 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import {
+  buildMockScoringWeightsResponse,
+  isN8nMockEnabled,
+  resolveMockCorrelationId,
+  waitForMockLatency,
+} from '../../_lib/n8nMock';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
 export async function POST(request: NextRequest) {
   try {
-    if (!N8N_WEBHOOK_BASE) {
-      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
-    }
-
     let body;
     try {
       body = await request.json();
@@ -17,7 +19,17 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const correlationId = body?.correlation_id;
+    const correlationId = resolveMockCorrelationId(body?.correlation_id);
+
+    if (isN8nMockEnabled()) {
+      await waitForMockLatency();
+      const mockData = buildMockScoringWeightsResponse(body, correlationId);
+      return createSuccessResponse(mockData, 200, correlationId);
+    }
+
+    if (!N8N_WEBHOOK_BASE) {
+      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
+    }
 
     const url = `${N8N_WEBHOOK_BASE}/scoring/weights`;
     

@@ -2,13 +2,12 @@ import { NextRequest } from 'next/server';
 import { createErrorResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createHash } from 'crypto';
-import { randomUUID } from 'crypto';
-
-// Validar UUID
-function isValidUUID(uuid: string): boolean {
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidRegex.test(uuid);
-}
+import {
+  buildMockPayloadHash,
+  isN8nMockEnabled,
+  resolveMockCorrelationId,
+  waitForMockLatency,
+} from '../../_lib/n8nMock';
 
 // Generar SHA256 hash
 function sha256(data: string): string {
@@ -31,7 +30,6 @@ export async function POST(request: NextRequest) {
     const decidedByUserId = body?.decided_by_user_id;
     const actorRole = body?.actor_role || 'committee';
     const companyId = body?.company_id;
-    const correlationIdInput = body?.correlation_id;
 
     // Validar campos requeridos
     if (!rfpId) {
@@ -50,12 +48,9 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('offer_id is required when decision is "approve"', 400);
     }
 
-    // Generar correlation_id
-    let correlationId: string;
-    if (correlationIdInput && isValidUUID(correlationIdInput)) {
-      correlationId = correlationIdInput;
-    } else {
-      correlationId = randomUUID();
+    const correlationId = resolveMockCorrelationId(body?.correlation_id);
+    if (isN8nMockEnabled()) {
+      await waitForMockLatency();
     }
 
     const decidedAt = new Date().toISOString();
@@ -134,12 +129,21 @@ export async function POST(request: NextRequest) {
 
     // 3. Si decision !== "approve", responder
     if (decision !== 'approve') {
+      const simulatedPayloadHash = buildMockPayloadHash({
+        correlation_id: correlationId,
+        rfp_id: rfpId,
+        decision,
+        decided_at: decidedAt,
+      });
       return Response.json(
         {
           ok: true,
           decision: decisionRow,
           purchase_order: null,
           evidence: null,
+          event_type: 'PO_SIMULATED_WITH_EVIDENCE',
+          summary: 'Orden de compra generada con evidencia inmutable',
+          payload_hash_sha256: simulatedPayloadHash,
           correlation_id: correlationId,
         },
         { status: 200 }
@@ -250,12 +254,22 @@ export async function POST(request: NextRequest) {
     }
 
     // Responder con éxito
+    const simulatedPayloadHash = buildMockPayloadHash({
+      correlation_id: correlationId,
+      po_id: updatedPORow.po_id,
+      evidence_id: evidenceRow.evidence_id,
+      decided_at: decidedAt,
+    });
+
     return Response.json(
       {
         ok: true,
         decision: decisionRow,
         purchase_order: updatedPORow,
         evidence: evidenceRow,
+        event_type: 'PO_SIMULATED_WITH_EVIDENCE',
+        summary: 'Orden de compra generada con evidencia inmutable',
+        payload_hash_sha256: simulatedPayloadHash,
         correlation_id: correlationId,
       },
       { status: 200 }

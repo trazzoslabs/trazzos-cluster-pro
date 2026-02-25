@@ -1,16 +1,18 @@
 import { NextRequest } from 'next/server';
-import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { fetchWithTimeout, createErrorResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
+import {
+  buildMockScoringWeightsResponse,
+  isN8nMockEnabled,
+  resolveMockCorrelationId,
+  waitForMockLatency,
+} from '../../_lib/n8nMock';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
 export async function POST(request: NextRequest) {
   try {
-    if (!N8N_WEBHOOK_BASE) {
-      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
-    }
-
     let body;
     try {
       body = await request.json();
@@ -18,11 +20,60 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const correlationId = body?.correlation_id;
+    const correlationId = resolveMockCorrelationId(body?.correlation_id);
     const rfpId = body?.rfp_id;
 
     if (!rfpId) {
       return createErrorResponse('rfp_id is required in request body', 400);
+    }
+
+    if (isN8nMockEnabled()) {
+      await waitForMockLatency();
+      const mockScoring = buildMockScoringWeightsResponse(body, correlationId);
+      const resultsJson = mockScoring.ranking;
+
+      const { data: weightsVersions, error: weightsError } = await supabaseServer
+        .from('scoring_weights_versions')
+        .select('weights_version_id')
+        .eq('rfp_id', rfpId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (weightsError) {
+        return createErrorResponse(`Failed to fetch weights version: ${weightsError.message}`, 500, correlationId);
+      }
+
+      const weightsVersionId = weightsVersions?.weights_version_id || null;
+
+      const { data: insertedRun, error: insertError } = await supabaseServer
+        .from('scoring_runs')
+        .insert({
+          rfp_id: rfpId,
+          weights_version_id: weightsVersionId,
+          results_json: resultsJson,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        return createErrorResponse(`Failed to insert scoring run: ${insertError.message}`, 500, correlationId);
+      }
+
+      return Response.json(
+        {
+          ok: true,
+          weights_version_id: weightsVersionId,
+          results_json: resultsJson,
+          run_row: insertedRun,
+          correlation_id: correlationId,
+        },
+        { status: 200 }
+      );
+    }
+
+    if (!N8N_WEBHOOK_BASE) {
+      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
     }
 
     // 1. Reenviar el body a n8n

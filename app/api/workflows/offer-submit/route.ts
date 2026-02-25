@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { createErrorResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
+import { isN8nMockEnabled, resolveMockCorrelationId, waitForMockLatency } from '../../_lib/n8nMock';
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,9 +12,13 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const correlationId = body?.correlation_id;
+    const correlationId = resolveMockCorrelationId(body?.correlation_id);
     const rfpId = body?.rfp_id;
     const priceTotal = body?.price_total;
+
+    if (isN8nMockEnabled()) {
+      await waitForMockLatency();
+    }
 
     // Validar campos requeridos
     if (!rfpId) {
@@ -77,8 +82,10 @@ export async function POST(request: NextRequest) {
     return Response.json(
       {
         ok: true,
+        message: 'Oferta procesada y almacenada con éxito',
+        offer_id: insertedOffer.offer_id,
         offer: insertedOffer,
-        ...(correlationId && { correlation_id: correlationId }),
+        correlation_id: correlationId,
       },
       { status: 200 }
     );
