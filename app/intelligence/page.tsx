@@ -5,9 +5,26 @@ import dynamic from 'next/dynamic';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
-import FactoryModel from './components/FactoryModel';
 import MapboxLoader from '../components/geo/MapboxLoader';
 import GeoSidebar from '../components/geo/GeoSidebar';
+import Synergy3DScene, { SceneLink, SceneNode } from './components/Synergy3DScene';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  PolarAngleAxis,
+  PolarGrid,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 // Importar GeoMap dinámicamente para evitar problemas de SSR
 const GeoMap = dynamic(() => import('../components/geo/GeoMap'), {
@@ -57,6 +74,29 @@ interface CommitteeDecision {
   decided_at: string | null;
 }
 
+interface Need {
+  need_id: string;
+  company_id: string | null;
+  item_category: string | null;
+  description: string | null;
+  quantity: number | null;
+  unit: string | null;
+}
+
+interface ScoringRun {
+  run_id: string;
+  rfp_id: string | null;
+  results_json: any;
+  created_at: string | null;
+}
+
+interface AuditEvent {
+  event_id: string;
+  event_type: string | null;
+  summary: string | null;
+  created_at: string | null;
+}
+
 type ViewMode = '3d' | 'network' | 'analytics' | 'timeline' | 'geospatial';
 
 /** Extract a human-readable name from a companies_involved_json entry */
@@ -66,6 +106,14 @@ function companyEntryName(entry: any): string {
     return entry.name ?? entry.company_name ?? entry.company_id ?? '';
   }
   return String(entry ?? '');
+}
+
+function companyEntryId(entry: any): string | null {
+  if (typeof entry === 'object' && entry !== null) {
+    const id = entry.company_id ?? entry.id ?? null;
+    return typeof id === 'string' && id ? id : null;
+  }
+  return null;
 }
 
 // Lista de empresas del cluster
@@ -441,10 +489,13 @@ export default function IntelligencePage() {
   const [rfps, setRfps] = useState<Rfp[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [decisions, setDecisions] = useState<CommitteeDecision[]>([]);
+  const [scoringRuns, setScoringRuns] = useState<ScoringRun[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'30' | '90' | '365'>('90');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+  const [needs, setNeeds] = useState<Need[]>([]);
   const [geoCompanies, setGeoCompanies] = useState<any[]>([]);
   const [geoSelectedCompanyId, setGeoSelectedCompanyId] = useState<string | null>(null);
   const [showConnections, setShowConnections] = useState(true);
@@ -454,13 +505,6 @@ export default function IntelligencePage() {
   useEffect(() => {
     loadData();
   }, []);
-
-  useEffect(() => {
-    if (activeMode === '3d' && canvasRef.current && synergies.length > 0) {
-      const cleanup = init3DView();
-      return cleanup;
-    }
-  }, [activeMode, synergies]);
 
   // Re-fetch datos geo cada 30s mientras la vista geoespacial esté activa
   useEffect(() => {
@@ -534,12 +578,14 @@ export default function IntelligencePage() {
     try {
       setLoading(true);
       
-      const [synergiesRes, rfpsRes, posRes, decisionsRes, companiesGeoRes] = await Promise.all([
+      const [synergiesRes, rfpsRes, posRes, decisionsRes, companiesGeoRes, auditRes, needsRes] = await Promise.all([
         fetch('/api/data/synergies'),
         fetch('/api/data/rfps'),
         fetch('/api/data/purchase-orders'),
         fetch('/api/data/committee-decisions'),
         fetch('/api/data/companies-geo'),
+        fetch('/api/data/audit-events?limit=30'),
+        fetch('/api/data/needs'),
       ]);
 
       const synergiesData = await synergiesRes.json();
@@ -547,6 +593,8 @@ export default function IntelligencePage() {
       const posData = await posRes.json();
       const decisionsData = await decisionsRes.json();
       const companiesGeoData = await companiesGeoRes.json();
+      const auditData = await auditRes.json();
+      const needsData = needsRes.ok ? await needsRes.json() : { data: [] };
 
       console.log('[Intelligence] companies-geo response:', {
         status: companiesGeoRes.status,
@@ -559,6 +607,25 @@ export default function IntelligencePage() {
       setPurchaseOrders(posData.data || []);
       setDecisions(decisionsData.data || []);
       setGeoCompanies(companiesGeoData.data || []);
+      setAuditEvents(auditData.data || []);
+      setNeeds(needsData.data || []);
+
+      const firstRfpId = (rfpsData.data || [])[0]?.rfp_id;
+      if (firstRfpId) {
+        try {
+          const scoringRes = await fetch(`/api/data/scoring-runs?rfp_id=${firstRfpId}`);
+          if (scoringRes.ok) {
+            const scoringData = await scoringRes.json();
+            setScoringRuns(scoringData.data || []);
+          } else {
+            setScoringRuns([]);
+          }
+        } catch {
+          setScoringRuns([]);
+        }
+      } else {
+        setScoringRuns([]);
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -829,6 +896,127 @@ export default function IntelligencePage() {
   };
 
   const filteredData = getFilteredData();
+  const latestScoring = scoringRuns[0]?.results_json || {};
+  const radarEfficiencyData = [
+    {
+      metric: 'Price',
+      value: Math.round((Number(latestScoring.price_efficiency ?? 0.9) || 0.9) * 100),
+      benchmark: 100,
+    },
+    {
+      metric: 'Delivery',
+      value: Math.round((Number(latestScoring.delivery_efficiency ?? 0.88) || 0.88) * 100),
+      benchmark: 100,
+    },
+  ];
+
+  const savingsDonutData = [
+    { name: 'Rodamientos', value: 15, color: '#9aff8d' },
+    { name: 'Lubricantes', value: 12, color: '#38bdf8' },
+    { name: 'EPP', value: 22, color: '#f59e0b' },
+  ];
+
+  const volumeBarsData = Array.from(
+    new Set(
+      synergies
+        .map((s) => s.item_category)
+        .filter((category): category is string => Boolean(category))
+    )
+  )
+    .slice(0, 6)
+    .map((category) => {
+      const clusterDemand = synergies
+        .filter((s) => s.item_category === category)
+        .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
+      const avgSavingPct =
+        synergies
+          .filter((s) => s.item_category === category)
+          .reduce((sum, s) => sum + Number(s.volume_total_json?.estimated_savings_pct || 12), 0) /
+          Math.max(1, synergies.filter((s) => s.item_category === category).length);
+
+      const individualDemand = Math.round(clusterDemand * (1 - avgSavingPct / 100));
+      return {
+        category,
+        individual: Math.max(0, individualDemand),
+        cluster: clusterDemand,
+      };
+    });
+
+  const timelineOrder = ['RFP_OPENED', 'OFFER_RECEIVED', 'PO_SIMULATED'];
+  const timelineEvents = timelineOrder.map((eventType, index) => {
+    const event = auditEvents.find((e) => (e.event_type || '').toUpperCase() === eventType);
+    return {
+      step: index + 1,
+      eventType,
+      label:
+        eventType === 'RFP_OPENED'
+          ? 'RFP opened'
+          : eventType === 'OFFER_RECEIVED'
+          ? 'Offer received'
+          : 'PO simulated',
+      summary: event?.summary || 'Evento pendiente',
+      createdAt: event?.created_at || null,
+      completed: Boolean(event),
+    };
+  });
+
+  const nodeMap = new Map<string, SceneNode>();
+  const sceneLinks: SceneLink[] = [];
+  synergies.forEach((synergy) => {
+    const raw = Array.isArray(synergy.companies_involved_json)
+      ? synergy.companies_involved_json
+      : [];
+    const entries = raw
+      .map((entry: any) => ({
+        key: companyEntryId(entry) || companyEntryName(entry),
+        name: companyEntryName(entry),
+        companyId: companyEntryId(entry),
+      }))
+      .filter((entry: any) => Boolean(entry.key) && Boolean(entry.name));
+
+    entries.forEach((entry: any) => {
+      const existing = nodeMap.get(entry.key);
+      const currentVolume = extractVolume(synergy.volume_total_json);
+      if (existing) {
+        existing.synergyCount += 1;
+        existing.totalVolume += currentVolume;
+        existing.hasMassiveSynergy = existing.hasMassiveSynergy || currentVolume >= 10000;
+      } else {
+        nodeMap.set(entry.key, {
+          key: entry.key,
+          name: entry.name,
+          companyId: entry.companyId,
+          synergyCount: 1,
+          totalVolume: currentVolume,
+          hasMassiveSynergy: currentVolume >= 10000,
+        });
+      }
+    });
+
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const sourceKey = entries[i].key;
+        const targetKey = entries[j].key;
+        if (sourceKey && targetKey) {
+          sceneLinks.push({
+            sourceKey,
+            targetKey,
+            intensity: Math.max(0.8, Math.min(2.5, extractVolume(synergy.volume_total_json) / 8000)),
+          });
+        }
+      }
+    }
+  });
+
+  const sceneNodes = Array.from(nodeMap.values());
+  const selectedNode = sceneNodes.find((node) => node.key === selectedCompanyId) || null;
+  const selectedNodeNeeds = selectedNode
+    ? needs.filter((need) =>
+        selectedNode.companyId
+          ? need.company_id === selectedNode.companyId
+          : (need.company_id || '').toLowerCase().includes(selectedNode.name.toLowerCase())
+      )
+    : [];
 
   return (
     <div className="space-y-6">
@@ -914,31 +1102,15 @@ export default function IntelligencePage() {
           {activeMode === '3d' && (
             <div className="relative">
               <SectionCard title="Vista 3D Inmersiva" description="Representación espacial del ecosistema industrial">
-                <div className="relative h-[600px] bg-black/50 rounded-lg overflow-hidden border border-zinc-800">
-                  <canvas
-                    ref={canvasRef}
-                    className="w-full h-full cursor-pointer"
+                <div className="relative">
+                  <Synergy3DScene
+                    nodes={sceneNodes}
+                    links={sceneLinks}
+                    selectedNodeKey={selectedCompanyId}
+                    onNodeSelect={setSelectedCompanyId}
                   />
-                  
-                  {/* Fábrica 3D cuando se selecciona un nodo */}
-                  {selectedCompanyId && (() => {
-                    const canvas = canvasRef.current;
-                    if (!canvas) return null;
-                    const rect = canvas.getBoundingClientRect();
-                    const centerX = rect.width / 2;
-                    const centerY = rect.height / 2;
-                    return (
-                      <FactoryModel
-                        x={centerX}
-                        y={centerY}
-                        scale={1.2}
-                        color="#9aff8d"
-                      />
-                    );
-                  })()}
-                  
-                  {/* Card flotante con métricas */}
-                  <div className="absolute top-6 right-6 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 min-w-[280px]">
+
+                  <div className="absolute top-6 right-6 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 min-w-[280px] z-10">
                     <h3 className="text-white font-bold text-lg mb-4">Estado del Cluster</h3>
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
@@ -971,81 +1143,66 @@ export default function IntelligencePage() {
                     </div>
                   </div>
 
-                  {/* Panel lateral con detalles de empresa seleccionada */}
-                  {selectedCompanyId && (() => {
-                    const companySynergies = synergies.filter(s => {
-                      try {
-                        const raw = s.companies_involved_json;
-                        if (!Array.isArray(raw)) return false;
-                        return raw.some((e: any) => companyEntryName(e) === selectedCompanyId);
-                      } catch {
-                        return false;
-                      }
-                    });
-                    const companySavings = companySynergies.reduce((sum, s) => {
-                      const volume = s.volume_total_json?.total || s.volume_total_json || 0;
-                      return sum + (typeof volume === 'number' ? volume * 0.1 : 0);
-                    }, 0);
-                    
-                    return (
-                      <div className="absolute left-6 top-1/2 -translate-y-1/2 z-50 w-80 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 shadow-2xl">
-                        <div className="flex items-start justify-between mb-4">
-                          <h3 className="text-white font-bold text-lg">{selectedCompanyId}</h3>
-                          <button
-                            onClick={() => setSelectedCompanyId(null)}
-                            className="text-zinc-400 hover:text-white transition-colors"
-                          >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
+                  {selectedNode && (
+                    <div className="absolute left-6 top-1/2 -translate-y-1/2 z-20 w-96 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 shadow-2xl">
+                      <div className="flex items-start justify-between mb-4">
+                        <h3 className="text-white font-bold text-lg">{selectedNode.name}</h3>
+                        <button
+                          onClick={() => setSelectedCompanyId(null)}
+                          className="text-zinc-400 hover:text-white transition-colors"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                          <div className="bg-zinc-800/60 rounded-lg p-3">
+                            <p className="text-zinc-400 text-xs">Sinergias</p>
+                            <p className="text-white font-semibold">{selectedNode.synergyCount}</p>
+                          </div>
+                          <div className="bg-zinc-800/60 rounded-lg p-3">
+                            <p className="text-zinc-400 text-xs">Volumen asociado</p>
+                            <p className="text-[#9aff8d] font-semibold">{selectedNode.totalVolume.toLocaleString('es-CO')}</p>
+                          </div>
                         </div>
 
-                        <div className="space-y-4">
-                          <div>
-                            <p className="text-zinc-400 text-xs mb-1">Tipo de compañía</p>
-                            <p className="text-white text-sm font-medium">Industrial</p>
-                          </div>
-
-                          <div>
-                            <p className="text-zinc-400 text-xs mb-1">Sinergias activas</p>
-                            <p className="text-white text-sm font-semibold">{companySynergies.length}</p>
-                          </div>
-
-                          <div>
-                            <p className="text-zinc-400 text-xs mb-1">Potencial de ahorro asociado</p>
-                            <p className="text-[#9aff8d] text-sm font-bold">
-                              US$ {companySavings.toLocaleString('es-CO')}
-                            </p>
-                          </div>
-
-                          <div className="pt-4 border-t border-zinc-800">
-                            <button
-                              onClick={() => setSelectedCompanyId(null)}
-                              className="w-full px-4 py-2 bg-[#9aff8d]/10 text-[#9aff8d] rounded-lg text-sm font-medium hover:bg-[#9aff8d]/20 transition-colors border border-[#9aff8d]/30"
-                            >
-                              Volver
-                            </button>
-                          </div>
+                        <div>
+                          <p className="text-zinc-300 text-sm font-medium mb-2">Needs actuales</p>
+                          {selectedNodeNeeds.length === 0 ? (
+                            <p className="text-zinc-500 text-xs">Sin needs asociados para esta empresa.</p>
+                          ) : (
+                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                              {selectedNodeNeeds.slice(0, 8).map((need) => (
+                                <div key={need.need_id} className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                                  <p className="text-zinc-100 text-xs font-medium">{need.description || 'Need sin descripción'}</p>
+                                  <p className="text-zinc-400 text-[11px] mt-1">
+                                    {need.item_category || 'Categoría N/A'} · {need.quantity ?? 0} {need.unit || ''}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
-                    );
-                  })()}
+                    </div>
+                  )}
 
-                  {/* Leyenda */}
-                  <div className="absolute bottom-6 left-6 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-4">
-                    <div className="flex gap-6 text-sm">
+                  <div className="absolute bottom-6 left-6 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-4 z-10">
+                    <div className="flex gap-6 text-sm flex-wrap">
                       <div className="flex items-center gap-2.5">
                         <div className="w-3.5 h-3.5 rounded-full bg-[#9aff8d]"></div>
-                        <span className="text-zinc-300 font-medium">Aprobada</span>
+                        <span className="text-zinc-300 font-medium">Nodo empresa</span>
                       </div>
                       <div className="flex items-center gap-2.5">
-                        <div className="w-3.5 h-3.5 rounded-full bg-[#ffd700]"></div>
-                        <span className="text-zinc-300 font-medium">RFP</span>
+                        <div className="w-3.5 h-3.5 rounded-full bg-cyan-300"></div>
+                        <span className="text-zinc-300 font-medium">Flujo n8n</span>
                       </div>
                       <div className="flex items-center gap-2.5">
-                        <div className="w-3.5 h-3.5 rounded-full bg-zinc-600"></div>
-                        <span className="text-zinc-300 font-medium">Pendiente</span>
+                        <div className="w-3.5 h-3.5 rounded-full bg-emerald-300"></div>
+                        <span className="text-zinc-300 font-medium">Partículas de ahorro masivo</span>
                       </div>
                     </div>
                   </div>
@@ -1215,7 +1372,6 @@ export default function IntelligencePage() {
           {/* Modo 3: Análisis Estratégico */}
           {activeMode === 'analytics' && (
             <div className="space-y-6">
-              {/* KPI Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
@@ -1247,205 +1403,131 @@ export default function IntelligencePage() {
                 </SectionCard>
               </div>
 
-              {/* Gráficos */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Volumen Consolidado por Categoría */}
-                <SectionCard title="Volumen Consolidado por Categoría" description="Suma de volume_total_json por item_category">
-                  <div className="h-64 flex items-end justify-around gap-2">
-                    {(() => {
-                      const categories = Array.from(new Set(synergies.map(s => s.item_category).filter(Boolean)));
-                      const categoryVolumes = categories.map(cat => ({
-                        category: cat,
-                        volume: synergies
-                          .filter(s => s.item_category === cat)
-                          .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0),
-                        count: synergies.filter(s => s.item_category === cat).length,
-                      })).sort((a, b) => b.volume - a.volume).slice(0, 6);
-
-                      const maxVol = Math.max(...categoryVolumes.map(c => c.volume), 1);
-
-                      if (categoryVolumes.length === 0) {
-                        return (
-                          <div className="w-full flex items-center justify-center h-full">
-                            <p className="text-zinc-500 text-sm">Sin datos de volumen</p>
-                          </div>
-                        );
-                      }
-
-                      return categoryVolumes.map((item, i) => {
-                        const height = (item.volume / maxVol) * 100;
-                        const label = item.volume > 1_000_000
-                          ? `${(item.volume / 1_000_000).toFixed(1)}M`
-                          : item.volume > 1_000
-                          ? `${(item.volume / 1_000).toFixed(0)}K`
-                          : item.volume.toLocaleString('es-CO');
-                        return (
-                          <div key={i} className="flex-1 flex flex-col items-center">
-                            <div className="relative w-full h-full flex items-end">
-                              <div
-                                className="w-full bg-gradient-to-t from-[#9aff8d]/80 to-[#9aff8d] rounded-t transition-all hover:opacity-80 cursor-pointer"
-                                style={{ height: `${Math.max(height, 4)}%` }}
-                                title={`${item.count} sinergias — Vol: ${item.volume.toLocaleString('es-CO')}`}
-                              />
-                            </div>
-                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
-                              {item.category || 'Otro'}
-                            </p>
-                            <p className="text-xs text-[#9aff8d] font-bold mt-1">{label}</p>
-                          </div>
-                        );
-                      });
-                    })()}
+                <SectionCard title="Radar de Eficiencia" description="Price vs Delivery efficiency del ranking">
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RadarChart data={radarEfficiencyData}>
+                        <PolarGrid stroke="#3f3f46" />
+                        <PolarAngleAxis dataKey="metric" tick={{ fill: '#a1a1aa', fontSize: 12 }} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
+                          labelStyle={{ color: '#d4d4d8' }}
+                        />
+                        <Radar
+                          name="Eficiencia"
+                          dataKey="value"
+                          stroke="#9aff8d"
+                          fill="#9aff8d"
+                          fillOpacity={0.35}
+                        />
+                        <Radar
+                          name="Benchmark"
+                          dataKey="benchmark"
+                          stroke="#6b7280"
+                          fill="#6b7280"
+                          fillOpacity={0.1}
+                        />
+                        <Legend />
+                      </RadarChart>
+                    </ResponsiveContainer>
                   </div>
                 </SectionCard>
 
-                {/* Ahorro Potencial por Categoría */}
-                <SectionCard title="Ahorro Potencial por Categoría" description="12 % estimado del volumen consolidado">
-                  <div className="h-64 flex items-end justify-around gap-2">
-                    {(() => {
-                      const categories = Array.from(new Set(synergies.map(s => s.item_category).filter(Boolean)));
-                      const categorySavings = categories.map(cat => {
-                        const vol = synergies
-                          .filter(s => s.item_category === cat)
-                          .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
-                        return { category: cat, savings: Math.round(vol * 0.12), count: synergies.filter(s => s.item_category === cat).length };
-                      }).sort((a, b) => b.savings - a.savings).slice(0, 6);
+                <SectionCard title="Donut de Ahorro por Categoría" description="Distribución estimada de ahorros">
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={savingsDonutData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={95}
+                          paddingAngle={3}
+                        >
+                          {savingsDonutData.map((entry) => (
+                            <Cell key={entry.name} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(value: number | string | undefined) => `${value ?? 0}%`}
+                          contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
+                          labelStyle={{ color: '#d4d4d8' }}
+                        />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </SectionCard>
+              </div>
 
-                      const maxSav = Math.max(...categorySavings.map(c => c.savings), 1);
-
-                      if (categorySavings.length === 0) {
-                        return (
-                          <div className="w-full flex items-center justify-center h-full">
-                            <p className="text-zinc-500 text-sm">Sin datos de ahorro</p>
-                          </div>
-                        );
-                      }
-
-                      return categorySavings.map((item, i) => {
-                        const height = (item.savings / maxSav) * 100;
-                        const label = item.savings > 1_000_000
-                          ? `$${(item.savings / 1_000_000).toFixed(1)}M`
-                          : item.savings > 1_000
-                          ? `$${(item.savings / 1_000).toFixed(0)}K`
-                          : `$${item.savings.toLocaleString('es-CO')}`;
-                        return (
-                          <div key={i} className="flex-1 flex flex-col items-center">
-                            <div className="relative w-full h-full flex items-end">
-                              <div
-                                className="w-full bg-gradient-to-t from-[#ffd700]/80 to-[#ffd700] rounded-t transition-all hover:opacity-80 cursor-pointer"
-                                style={{ height: `${Math.max(height, 4)}%` }}
-                                title={`${item.count} sinergias — Ahorro: $${item.savings.toLocaleString('es-CO')}`}
-                              />
-                            </div>
-                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
-                              {item.category || 'Otro'}
-                            </p>
-                            <p className="text-xs text-[#ffd700] font-bold mt-1">{label}</p>
-                          </div>
-                        );
-                      });
-                    })()}
+              <div className="grid grid-cols-1 gap-6">
+                <SectionCard title="Barras de Volumen Consolidado" description="Demanda individual vs demanda consolidada del cluster">
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={volumeBarsData} margin={{ top: 10, right: 20, left: 10, bottom: 30 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                        <XAxis
+                          dataKey="category"
+                          tick={{ fill: '#a1a1aa', fontSize: 11 }}
+                          angle={-15}
+                          textAnchor="end"
+                          interval={0}
+                        />
+                        <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
+                          labelStyle={{ color: '#d4d4d8' }}
+                        />
+                        <Legend />
+                        <Bar dataKey="individual" name="Demanda individual" fill="#64748b" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="cluster" name="Demanda cluster" fill="#9aff8d" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
                 </SectionCard>
 
-                {/* Sinergias por Categoría (conteo) */}
-                <SectionCard title="Sinergias por Categoría" description="">
-                  <div className="h-64 flex items-end justify-around gap-2">
-                    {(() => {
-                      const categories = Array.from(new Set(synergies.map(s => s.item_category).filter(Boolean)));
-                      const categoryCounts = categories.map(cat => ({
-                        category: cat,
-                        count: synergies.filter(s => s.item_category === cat).length,
-                      })).sort((a, b) => b.count - a.count).slice(0, 6);
-                      
-                      const maxCount = Math.max(...categoryCounts.map(c => c.count), 1);
-
-                      if (categoryCounts.length === 0) {
-                        return (
-                          <div className="w-full flex items-center justify-center h-full">
-                            <p className="text-zinc-500 text-sm">Sin sinergias</p>
+                <SectionCard title="Status Timeline" description="Progreso operativo desde RFP_OPENED hasta PO_SIMULATED">
+                  <div className="space-y-4">
+                    {timelineEvents.map((step, index) => (
+                      <div key={step.eventType} className="flex items-start gap-3">
+                        <div className="flex flex-col items-center">
+                          <div
+                            className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-semibold ${
+                              step.completed
+                                ? 'bg-[#9aff8d] text-[#232323] border-[#9aff8d]'
+                                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                            }`}
+                          >
+                            {step.step}
                           </div>
-                        );
-                      }
-                      
-                      return categoryCounts.map((item, i) => {
-                        const height = (item.count / maxCount) * 100;
-                        return (
-                          <div key={i} className="flex-1 flex flex-col items-center">
-                            <div className="relative w-full h-full flex items-end">
-                              <div
-                                className="w-full bg-gradient-to-t from-[#9aff8d]/80 to-[#9aff8d] rounded-t transition-all hover:opacity-80 cursor-pointer"
-                                style={{ height: `${Math.max(height, 4)}%` }}
-                                title={`${item.count} sinergias`}
-                              />
-                            </div>
-                            <p className="text-xs text-zinc-400 mt-3 text-center font-medium truncate max-w-[90px]">
-                              {item.category || 'Categoría'}
+                          {index < timelineEvents.length - 1 && (
+                            <div className={`w-0.5 h-8 ${step.completed ? 'bg-[#9aff8d]/70' : 'bg-zinc-700'}`} />
+                          )}
+                        </div>
+                        <div className="flex-1 pb-2">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm text-white font-medium">{step.label}</p>
+                            <span className="text-[11px] text-zinc-400">{step.eventType}</span>
+                          </div>
+                          <p className="text-xs text-zinc-400 mt-1">{step.summary}</p>
+                          {step.createdAt && (
+                            <p className="text-[11px] text-zinc-500 mt-1">
+                              {new Date(step.createdAt).toLocaleString('es-CO')}
                             </p>
-                            <p className="text-sm text-[#9aff8d] font-bold mt-1">{item.count}</p>
-                          </div>
-                        );
-                      });
-                    })()}
-                  </div>
-                </SectionCard>
-
-                {/* Pie chart de estados */}
-                <SectionCard title="Distribución de Estados" description="">
-                  <div className="h-64 flex items-center justify-center">
-                    <svg width="200" height="200" viewBox="0 0 200 200">
-                      {(() => {
-                        const approved = synergies.filter(s => s.status === 'approved').length;
-                        const rfp = synergies.filter(s => s.status === 'rfp').length;
-                        const pending = synergies.filter(s => !s.status || s.status === 'pending').length;
-                        const total = synergies.length;
-                        
-                        if (total === 0) return null;
-
-                        let currentAngle = 0;
-                        const radius = 80;
-                        const centerX = 100;
-                        const centerY = 100;
-                        
-                        return (
-                          <>
-                            {approved > 0 && (
-                              <path
-                                d={`M ${centerX} ${centerY} L ${centerX + Math.cos(currentAngle) * radius} ${centerY + Math.sin(currentAngle) * radius} A ${radius} ${radius} 0 ${(approved / total) * 360 > 180 ? 1 : 0} 1 ${centerX + Math.cos(currentAngle + (approved / total) * Math.PI * 2) * radius} ${centerY + Math.sin(currentAngle + (approved / total) * Math.PI * 2) * radius} Z`}
-                                fill="#9aff8d"
-                              />
-                            )}
-                            {rfp > 0 && (
-                              <path
-                                d={`M ${centerX} ${centerY} L ${centerX + Math.cos(currentAngle + (approved / total) * Math.PI * 2) * radius} ${centerY + Math.sin(currentAngle + (approved / total) * Math.PI * 2) * radius} A ${radius} ${radius} 0 ${(rfp / total) * 360 > 180 ? 1 : 0} 1 ${centerX + Math.cos(currentAngle + ((approved + rfp) / total) * Math.PI * 2) * radius} ${centerY + Math.sin(currentAngle + ((approved + rfp) / total) * Math.PI * 2) * radius} Z`}
-                                fill="#ffd700"
-                              />
-                            )}
-                            {pending > 0 && (
-                              <path
-                                d={`M ${centerX} ${centerY} L ${centerX + Math.cos(currentAngle + ((approved + rfp) / total) * Math.PI * 2) * radius} ${centerY + Math.sin(currentAngle + ((approved + rfp) / total) * Math.PI * 2) * radius} A ${radius} ${radius} 0 ${(pending / total) * 360 > 180 ? 1 : 0} 1 ${centerX + Math.cos(currentAngle + Math.PI * 2) * radius} ${centerY + Math.sin(currentAngle + Math.PI * 2) * radius} Z`}
-                                fill="#6b7280"
-                              />
-                            )}
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  </div>
-                  <div className="flex justify-center gap-6 mt-5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-4 h-4 rounded-full bg-[#9aff8d]"></div>
-                      <span className="text-sm text-zinc-400 font-medium">Aprobadas</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="pt-2 border-t border-zinc-800">
+                      <p className="text-xs text-zinc-500">
+                        Eventos cargados: {auditEvents.length} | Scoring runs: {scoringRuns.length}
+                      </p>
                     </div>
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-4 h-4 rounded-full bg-[#ffd700]"></div>
-                      <span className="text-sm text-zinc-400 font-medium">RFP</span>
-                    </div>
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-4 h-4 rounded-full bg-zinc-600"></div>
-                      <span className="text-sm text-zinc-400 font-medium">Pendientes</span>
-                    </div>
-                  </div>
+                  </div> 
                 </SectionCard>
               </div>
             </div>
