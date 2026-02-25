@@ -1010,6 +1010,16 @@ export default function IntelligencePage() {
 
   const sceneNodes = Array.from(nodeMap.values());
   const selectedNode = sceneNodes.find((node) => node.key === selectedCompanyId) || null;
+  const selectedNodeSynergies = selectedNode
+    ? synergies.filter((synergy) => {
+        const involved = Array.isArray(synergy.companies_involved_json) ? synergy.companies_involved_json : [];
+        return involved.some((entry: any) =>
+          selectedNode.companyId
+            ? companyEntryId(entry) === selectedNode.companyId
+            : companyEntryName(entry).toLowerCase() === selectedNode.name.toLowerCase()
+        );
+      })
+    : [];
   const selectedNodeNeeds = selectedNode
     ? needs.filter((need) =>
         selectedNode.companyId
@@ -1017,6 +1027,13 @@ export default function IntelligencePage() {
           : (need.company_id || '').toLowerCase().includes(selectedNode.name.toLowerCase())
       )
     : [];
+  const selectedNodeSavings = selectedNodeSynergies.reduce(
+    (sum, synergy) => sum + extractVolume(synergy.volume_total_json) * ((synergy.volume_total_json?.estimated_savings_pct || 12) / 100),
+    0
+  );
+  const selectedNodeCategories = Array.from(
+    new Set(selectedNodeNeeds.map((need) => need.item_category).filter((category): category is string => Boolean(category)))
+  );
 
   return (
     <div className="space-y-6">
@@ -1108,6 +1125,10 @@ export default function IntelligencePage() {
                     links={sceneLinks}
                     selectedNodeKey={selectedCompanyId}
                     onNodeSelect={setSelectedCompanyId}
+                    onSelectCompany={(name) => {
+                      const matched = sceneNodes.find((node) => node.name === name);
+                      if (matched) setSelectedCompanyId(matched.key);
+                    }}
                   />
 
                   <div className="absolute top-6 right-6 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 min-w-[280px] z-10">
@@ -1169,22 +1190,33 @@ export default function IntelligencePage() {
                           </div>
                         </div>
 
-                        <div>
-                          <p className="text-zinc-300 text-sm font-medium mb-2">Needs actuales</p>
-                          {selectedNodeNeeds.length === 0 ? (
-                            <p className="text-zinc-500 text-xs">Sin needs asociados para esta empresa.</p>
-                          ) : (
-                            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                              {selectedNodeNeeds.slice(0, 8).map((need) => (
-                                <div key={need.need_id} className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
-                                  <p className="text-zinc-100 text-xs font-medium">{need.description || 'Need sin descripción'}</p>
-                                  <p className="text-zinc-400 text-[11px] mt-1">
-                                    {need.item_category || 'Categoría N/A'} · {need.quantity ?? 0} {need.unit || ''}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                        <div className="grid grid-cols-1 gap-2 text-xs">
+                          <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                            <p className="text-zinc-400">% de Ahorro</p>
+                            <p className="text-[#9aff8d] font-semibold">
+                              {selectedNode.totalVolume > 0
+                                ? `${Math.round((selectedNodeSavings / selectedNode.totalVolume) * 100)}%`
+                                : '0%'}
+                            </p>
+                          </div>
+                          <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                            <p className="text-zinc-400">Volumen Consolidado</p>
+                            <p className="text-white font-semibold">{selectedNode.totalVolume.toLocaleString('es-CO')}</p>
+                          </div>
+                          <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                            <p className="text-zinc-400">Sinergias detectadas</p>
+                            <p className="text-white font-semibold">{selectedNodeSynergies.length}</p>
+                          </div>
+                          <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                            <p className="text-zinc-400">Categorias activas</p>
+                            <p className="text-white font-semibold">
+                              {selectedNodeCategories.length > 0 ? selectedNodeCategories.slice(0, 3).join(', ') : 'Sin categorias activas'}
+                            </p>
+                          </div>
+                          <div className="bg-zinc-800/50 border border-zinc-700 rounded-md p-2">
+                            <p className="text-zinc-400">Empresas aliadas</p>
+                            <p className="text-white font-semibold">{Math.max(1, selectedNodeSynergies.length + 1)}</p>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1197,8 +1229,8 @@ export default function IntelligencePage() {
                         <span className="text-zinc-300 font-medium">Nodo empresa</span>
                       </div>
                       <div className="flex items-center gap-2.5">
-                        <div className="w-3.5 h-3.5 rounded-full bg-cyan-300"></div>
-                        <span className="text-zinc-300 font-medium">Flujo n8n</span>
+                        <div className="w-3.5 h-3.5 rounded-full bg-white"></div>
+                        <span className="text-zinc-300 font-medium">Conexión de colaboración</span>
                       </div>
                       <div className="flex items-center gap-2.5">
                         <div className="w-3.5 h-3.5 rounded-full bg-emerald-300"></div>

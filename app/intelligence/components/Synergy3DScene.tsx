@@ -79,7 +79,7 @@ function Starfield({ count = 2600 }: { count?: number }) {
             float d = length(gl_PointCoord - vec2(0.5));
             if (d > 0.5) discard;
             float glow = smoothstep(0.5, 0.0, d);
-            gl_FragColor = vec4(vec3(0.78, 0.9, 1.0), glow * vAlpha);
+            gl_FragColor = vec4(vec3(0.94, 0.96, 0.98), glow * vAlpha);
           }
         `}
       />
@@ -116,7 +116,7 @@ function LinkFlux({ a, b, count = 12 }: { a: THREE.Vector3; b: THREE.Vector3; co
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[base, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#7dd3fc" size={0.09} transparent opacity={0.9} depthWrite={false} />
+      <pointsMaterial color="#ffffff" size={0.09} transparent opacity={0.85} depthWrite={false} />
     </points>
   );
 }
@@ -145,11 +145,13 @@ function CompanyNode({
   position,
   selected,
   onSelect,
+  onSelectCompany,
 }: {
   node: SceneNode;
   position: THREE.Vector3;
   selected: boolean;
   onSelect: () => void;
+  onSelectCompany?: (name: string) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
@@ -161,7 +163,8 @@ function CompanyNode({
     groupRef.current.scale.setScalar(next);
   });
 
-  const emissive = selected ? 1.8 : hovered ? 1.2 : 0.7;
+  const emissive = selected ? 2.1 : hovered ? 1.45 : 0.85;
+  const showLabel = hovered || selected;
   return (
     <group ref={groupRef} position={position}>
       <mesh
@@ -172,24 +175,33 @@ function CompanyNode({
         onPointerOut={() => setHovered(false)}
         onClick={(event) => {
           event.stopPropagation();
+          onSelectCompany?.(node.name);
           onSelect();
         }}
       >
         <sphereGeometry args={[0.25 + Math.min(node.synergyCount, 6) * 0.03, 30, 30]} />
         <meshStandardMaterial
-          color="#6ee7ff"
-          emissive="#22d3ee"
+          color={selected ? '#9aff8d' : '#74ff9a'}
+          emissive="#59ff8f"
           emissiveIntensity={emissive}
           metalness={0.65}
           roughness={0.18}
         />
       </mesh>
-      <pointLight color="#38bdf8" intensity={selected ? 1.7 : 1.1} distance={3.5} />
-      <Html sprite center distanceFactor={8}>
-        <div className="px-2 py-1 rounded bg-black/55 border border-cyan-400/30 text-[11px] text-cyan-100 whitespace-nowrap">
-          {node.name}
-        </div>
-      </Html>
+      {selected && (
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.42, 0.02, 12, 48]} />
+          <meshBasicMaterial color="#9aff8d" transparent opacity={0.9} />
+        </mesh>
+      )}
+      <pointLight color="#9aff8d" intensity={selected ? 2 : 1.2} distance={3.8} />
+      {showLabel && (
+        <Html sprite center distanceFactor={10}>
+          <div className="px-2 py-1 rounded bg-gradient-to-b from-zinc-800/90 to-black/85 border border-zinc-500/35 text-[11px] text-white whitespace-nowrap">
+            {node.name}
+          </div>
+        </Html>
+      )}
     </group>
   );
 }
@@ -199,11 +211,13 @@ function GraphScene({
   links,
   selectedNodeKey,
   onNodeSelect,
+  onSelectCompany,
 }: {
   nodes: SceneNode[];
   links: SceneLink[];
   selectedNodeKey: string | null;
   onNodeSelect: (nodeKey: string | null) => void;
+  onSelectCompany?: (name: string) => void;
 }) {
   const positions = useMemo(() => {
     const out = new Map<string, THREE.Vector3>();
@@ -225,17 +239,17 @@ function GraphScene({
 
   return (
     <>
-      <color attach="background" args={['#020617']} />
-      <fog attach="fog" args={['#020617', 9, 36]} />
+      <color attach="background" args={['#111418']} />
+      <fog attach="fog" args={['#111418', 9, 36]} />
       <Starfield />
 
-      <ambientLight intensity={0.18} />
-      <directionalLight position={[5, 8, 4]} intensity={0.65} color="#dbeafe" />
-      <pointLight position={[0, 0, 0]} intensity={1.2} color="#14b8a6" distance={8} />
+      <ambientLight intensity={0.22} />
+      <directionalLight position={[5, 8, 4]} intensity={0.6} color="#f3f4f6" />
+      <pointLight position={[0, 0, 0]} intensity={1.1} color="#9aff8d" distance={8} />
 
       <mesh position={[0, 0, 0]}>
         <sphereGeometry args={[0.38, 24, 24]} />
-        <meshStandardMaterial color="#7dd3fc" emissive="#22d3ee" emissiveIntensity={1.3} metalness={0.8} roughness={0.15} />
+        <meshStandardMaterial color="#9aff8d" emissive="#84ff9f" emissiveIntensity={1.4} metalness={0.82} roughness={0.14} />
       </mesh>
 
       {links.map((link) => {
@@ -246,10 +260,10 @@ function GraphScene({
           <Line
             key={`line-${link.sourceKey}-${link.targetKey}`}
             points={[a.toArray(), b.toArray()]}
-            color="#38bdf8"
+            color="#ffffff"
             lineWidth={Math.max(0.9, Math.min(2.7, link.intensity))}
             transparent
-            opacity={0.45}
+            opacity={0.38}
           />
         );
       })}
@@ -270,6 +284,7 @@ function GraphScene({
               node={node}
               position={pos}
               selected={selectedNodeKey === node.key}
+              onSelectCompany={onSelectCompany}
               onSelect={() => onNodeSelect(selectedNodeKey === node.key ? null : node.key)}
             />
             {node.hasMassiveSynergy && <CenterConvergence origin={pos} />}
@@ -290,7 +305,7 @@ function GraphScene({
       />
       <Environment preset="night" />
       <EffectComposer>
-        <Bloom intensity={1.2} luminanceThreshold={0.15} luminanceSmoothing={0.3} mipmapBlur />
+        <Bloom intensity={1.45} luminanceThreshold={0.14} luminanceSmoothing={0.28} mipmapBlur />
       </EffectComposer>
     </>
   );
@@ -301,20 +316,23 @@ export default function Synergy3DScene({
   links,
   selectedNodeKey,
   onNodeSelect,
+  onSelectCompany,
 }: {
   nodes: SceneNode[];
   links: SceneLink[];
   selectedNodeKey: string | null;
   onNodeSelect: (nodeKey: string | null) => void;
+  onSelectCompany?: (name: string) => void;
 }) {
   return (
-    <div className="h-[600px] bg-[#020617] rounded-lg overflow-hidden border border-zinc-800">
+    <div className="h-[600px] bg-[#111418] rounded-lg overflow-hidden border border-zinc-700">
       <Canvas camera={{ position: [0, 4.8, 10], fov: 47 }} onPointerMissed={() => onNodeSelect(null)}>
         <GraphScene
           nodes={nodes}
           links={links}
           selectedNodeKey={selectedNodeKey}
           onNodeSelect={onNodeSelect}
+          onSelectCompany={onSelectCompany}
         />
       </Canvas>
     </div>
