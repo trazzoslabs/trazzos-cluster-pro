@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Environment, Line, OrbitControls } from '@react-three/drei';
+import { Environment, Html, Line, OrbitControls } from '@react-three/drei';
+import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import * as THREE from 'three';
 
 export interface SceneNode {
@@ -20,36 +21,93 @@ export interface SceneLink {
   intensity: number;
 }
 
-function ParticleFlow({ origin, count = 28 }: { origin: THREE.Vector3; count?: number }) {
+function Starfield({ count = 2600 }: { count?: number }) {
+  const pointsRef = useRef<THREE.Points>(null);
+  const materialRef = useRef<THREE.ShaderMaterial>(null);
+
+  const data = useMemo(() => {
+    const positions = new Float32Array(count * 3);
+    const phases = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) {
+      const r = 16 + Math.random() * 30;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = (Math.random() - 0.5) * 18;
+      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+      phases[i] = Math.random() * Math.PI * 2;
+    }
+    return { positions, phases };
+  }, [count]);
+
+  useFrame((state, delta) => {
+    if (pointsRef.current) {
+      pointsRef.current.rotation.y += delta * 0.01;
+    }
+    if (materialRef.current) {
+      materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
+    }
+  });
+
+  return (
+    <points ref={pointsRef}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[data.positions, 3]} />
+        <bufferAttribute attach="attributes-aPhase" args={[data.phases, 1]} />
+      </bufferGeometry>
+      <shaderMaterial
+        ref={materialRef}
+        transparent
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        uniforms={{ uTime: { value: 0 } }}
+        vertexShader={`
+          attribute float aPhase;
+          uniform float uTime;
+          varying float vAlpha;
+          void main() {
+            float twinkle = 0.6 + 0.4 * sin(uTime * 0.8 + aPhase);
+            vAlpha = twinkle;
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = (1.4 + twinkle * 1.8) * (180.0 / -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
+          }
+        `}
+        fragmentShader={`
+          varying float vAlpha;
+          void main() {
+            float d = length(gl_PointCoord - vec2(0.5));
+            if (d > 0.5) discard;
+            float glow = smoothstep(0.5, 0.0, d);
+            gl_FragColor = vec4(vec3(0.78, 0.9, 1.0), glow * vAlpha);
+          }
+        `}
+      />
+    </points>
+  );
+}
+
+function LinkFlux({ a, b, count = 12 }: { a: THREE.Vector3; b: THREE.Vector3; count?: number }) {
   const pointsRef = useRef<THREE.Points>(null);
   const progressRef = useRef<number[]>([]);
-
   const base = useMemo(() => {
-    const positions = new Float32Array(count * 3);
-    const progress = Array.from({ length: count }, () => Math.random());
-    progressRef.current = progress;
-    return positions;
+    const arr = new Float32Array(count * 3);
+    progressRef.current = Array.from({ length: count }, () => Math.random());
+    return arr;
   }, [count]);
 
   useFrame((_state, delta) => {
     const points = pointsRef.current;
     if (!points) return;
     const arr = points.geometry.attributes.position.array as Float32Array;
-
     for (let i = 0; i < count; i += 1) {
-      let t = progressRef.current[i] + delta * 0.25;
+      let t = progressRef.current[i] + delta * (0.22 + i * 0.003);
       if (t > 1) t = 0;
       progressRef.current[i] = t;
-
-      const x = THREE.MathUtils.lerp(origin.x, 0, t) + Math.sin(i + t * Math.PI * 2) * 0.08;
-      const y = THREE.MathUtils.lerp(origin.y, 0, t) + Math.cos(i + t * Math.PI * 2) * 0.08;
-      const z = THREE.MathUtils.lerp(origin.z, 0, t);
-
-      arr[i * 3] = x;
-      arr[i * 3 + 1] = y;
-      arr[i * 3 + 2] = z;
+      arr[i * 3] = THREE.MathUtils.lerp(a.x, b.x, t);
+      arr[i * 3 + 1] = THREE.MathUtils.lerp(a.y, b.y, t);
+      arr[i * 3 + 2] = THREE.MathUtils.lerp(a.z, b.z, t);
     }
-
     points.geometry.attributes.position.needsUpdate = true;
   });
 
@@ -58,8 +116,81 @@ function ParticleFlow({ origin, count = 28 }: { origin: THREE.Vector3; count?: n
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[base, 3]} />
       </bufferGeometry>
-      <pointsMaterial color="#9aff8d" size={0.04} sizeAttenuation transparent opacity={0.8} />
+      <pointsMaterial color="#7dd3fc" size={0.09} transparent opacity={0.9} depthWrite={false} />
     </points>
+  );
+}
+
+function CenterConvergence({ origin }: { origin: THREE.Vector3 }) {
+  const pulseRef = useRef<THREE.Mesh>(null);
+  useFrame((state) => {
+    if (!pulseRef.current) return;
+    const blend = (Math.sin(state.clock.elapsedTime * 0.7) + 1) / 2;
+    pulseRef.current.position.set(
+      THREE.MathUtils.lerp(origin.x, 0, blend),
+      THREE.MathUtils.lerp(origin.y, 0, blend),
+      THREE.MathUtils.lerp(origin.z, 0, blend)
+    );
+  });
+  return (
+    <mesh ref={pulseRef}>
+      <sphereGeometry args={[0.06, 10, 10]} />
+      <meshBasicMaterial color="#a7f3d0" />
+    </mesh>
+  );
+}
+
+function CompanyNode({
+  node,
+  position,
+  selected,
+  onSelect,
+}: {
+  node: SceneNode;
+  position: THREE.Vector3;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const [hovered, setHovered] = useState(false);
+
+  useFrame((_state, delta) => {
+    if (!groupRef.current) return;
+    const target = selected ? 1.45 : hovered ? 1.25 : 1;
+    const next = THREE.MathUtils.lerp(groupRef.current.scale.x, target, delta * 6);
+    groupRef.current.scale.setScalar(next);
+  });
+
+  const emissive = selected ? 1.8 : hovered ? 1.2 : 0.7;
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh
+        onPointerOver={(event) => {
+          event.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect();
+        }}
+      >
+        <sphereGeometry args={[0.25 + Math.min(node.synergyCount, 6) * 0.03, 30, 30]} />
+        <meshStandardMaterial
+          color="#6ee7ff"
+          emissive="#22d3ee"
+          emissiveIntensity={emissive}
+          metalness={0.65}
+          roughness={0.18}
+        />
+      </mesh>
+      <pointLight color="#38bdf8" intensity={selected ? 1.7 : 1.1} distance={3.5} />
+      <Html sprite center distanceFactor={8}>
+        <div className="px-2 py-1 rounded bg-black/55 border border-cyan-400/30 text-[11px] text-cyan-100 whitespace-nowrap">
+          {node.name}
+        </div>
+      </Html>
+    </group>
   );
 }
 
@@ -79,12 +210,12 @@ function GraphScene({
     const total = Math.max(nodes.length, 1);
     nodes.forEach((node, idx) => {
       const angle = (idx / total) * Math.PI * 2;
-      const radius = 3.6 + (idx % 2) * 0.5;
+      const radius = 4.2 + (idx % 3) * 0.55;
       out.set(
         node.key,
         new THREE.Vector3(
           Math.cos(angle) * radius,
-          0.2 + (node.synergyCount % 3) * 0.2,
+          (idx % 2) * 0.4 - 0.2,
           Math.sin(angle) * radius
         )
       );
@@ -94,18 +225,17 @@ function GraphScene({
 
   return (
     <>
-      <ambientLight intensity={0.45} />
-      <directionalLight position={[4, 6, 3]} intensity={1.1} color="#d4fff0" />
-      <pointLight position={[0, 2.2, 0]} intensity={0.85} color="#9aff8d" />
+      <color attach="background" args={['#020617']} />
+      <fog attach="fog" args={['#020617', 9, 36]} />
+      <Starfield />
 
-      <mesh position={[0, -0.5, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[6.4, 64]} />
-        <meshStandardMaterial color="#0f172a" metalness={0.8} roughness={0.35} />
-      </mesh>
+      <ambientLight intensity={0.18} />
+      <directionalLight position={[5, 8, 4]} intensity={0.65} color="#dbeafe" />
+      <pointLight position={[0, 0, 0]} intensity={1.2} color="#14b8a6" distance={8} />
 
-      <mesh position={[0, 0.7, 0]}>
-        <cylinderGeometry args={[0.4, 0.65, 1.1, 24]} />
-        <meshStandardMaterial color="#9aff8d" emissive="#4ade80" emissiveIntensity={0.45} metalness={0.9} roughness={0.22} />
+      <mesh position={[0, 0, 0]}>
+        <sphereGeometry args={[0.38, 24, 24]} />
+        <meshStandardMaterial color="#7dd3fc" emissive="#22d3ee" emissiveIntensity={1.3} metalness={0.8} roughness={0.15} />
       </mesh>
 
       {links.map((link) => {
@@ -114,55 +244,54 @@ function GraphScene({
         if (!a || !b) return null;
         return (
           <Line
-            key={`${link.sourceKey}-${link.targetKey}`}
+            key={`line-${link.sourceKey}-${link.targetKey}`}
             points={[a.toArray(), b.toArray()]}
-            color="#67e8f9"
-            lineWidth={Math.max(0.8, Math.min(2.4, link.intensity))}
+            color="#38bdf8"
+            lineWidth={Math.max(0.9, Math.min(2.7, link.intensity))}
             transparent
-            opacity={0.65}
+            opacity={0.45}
           />
         );
+      })}
+
+      {links.map((link) => {
+        const a = positions.get(link.sourceKey);
+        const b = positions.get(link.targetKey);
+        if (!a || !b) return null;
+        return <LinkFlux key={`flux-${link.sourceKey}-${link.targetKey}`} a={a} b={b} count={10} />;
       })}
 
       {nodes.map((node) => {
         const pos = positions.get(node.key);
         if (!pos) return null;
-        const selected = selectedNodeKey === node.key;
-        const h = 0.7 + Math.min(node.synergyCount, 5) * 0.27;
-        const glow = selected ? 0.55 : 0.28;
         return (
-          <group key={node.key} position={pos}>
-            <mesh
-              position={[0, h / 2, 0]}
-              onClick={(event) => {
-                event.stopPropagation();
-                onNodeSelect(selected ? null : node.key);
-              }}
-            >
-              <boxGeometry args={[0.6, h, 0.6]} />
-              <meshStandardMaterial
-                color={selected ? '#86efac' : '#22c55e'}
-                emissive="#16a34a"
-                emissiveIntensity={glow}
-                metalness={0.85}
-                roughness={0.22}
-              />
-            </mesh>
-            {node.hasMassiveSynergy && <ParticleFlow origin={new THREE.Vector3(0, h * 0.55, 0)} />}
+          <group key={node.key}>
+            <CompanyNode
+              node={node}
+              position={pos}
+              selected={selectedNodeKey === node.key}
+              onSelect={() => onNodeSelect(selectedNodeKey === node.key ? null : node.key)}
+            />
+            {node.hasMassiveSynergy && <CenterConvergence origin={pos} />}
           </group>
         );
       })}
 
       <OrbitControls
         enablePan={false}
-        enableDamping
-        dampingFactor={0.08}
-        minDistance={6}
-        maxDistance={12}
-        minPolarAngle={Math.PI / 4}
-        maxPolarAngle={Math.PI / 2.0}
+        autoRotate={true}
+        autoRotateSpeed={0.5}
+        enableDamping={true}
+        dampingFactor={0.06}
+        minDistance={7}
+        maxDistance={18}
+        minPolarAngle={Math.PI / 5}
+        maxPolarAngle={(Math.PI * 4) / 5}
       />
-      <Environment preset="city" />
+      <Environment preset="night" />
+      <EffectComposer>
+        <Bloom intensity={1.2} luminanceThreshold={0.15} luminanceSmoothing={0.3} mipmapBlur />
+      </EffectComposer>
     </>
   );
 }
@@ -179,8 +308,8 @@ export default function Synergy3DScene({
   onNodeSelect: (nodeKey: string | null) => void;
 }) {
   return (
-    <div className="h-[600px] bg-black/50 rounded-lg overflow-hidden border border-zinc-800">
-      <Canvas camera={{ position: [0, 5, 8], fov: 45 }} onPointerMissed={() => onNodeSelect(null)}>
+    <div className="h-[600px] bg-[#020617] rounded-lg overflow-hidden border border-zinc-800">
+      <Canvas camera={{ position: [0, 4.8, 10], fov: 47 }} onPointerMissed={() => onNodeSelect(null)}>
         <GraphScene
           nodes={nodes}
           links={links}
