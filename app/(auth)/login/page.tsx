@@ -295,7 +295,7 @@ function LoginPageContent() {
             <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-black/10 to-transparent z-10 pointer-events-none" />
             
             <iframe
-              src="https://www.youtube.com/embed/5of9ZaX84Zk?autoplay=1&mute=1&loop=1&playlist=5of9ZaX84Zk&controls=1&modestbranding=1&rel=0&enablejsapi=1"
+              src="https://www.youtube.com/embed/XAkArk8EKlg?autoplay=1&mute=1&loop=1&playlist=XAkArk8EKlg&controls=1&modestbranding=1&rel=0&enablejsapi=1"
               className="w-full h-full"
               allow="autoplay; encrypted-media; accelerometer; gyroscope; picture-in-picture"
               allowFullScreen
