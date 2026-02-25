@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { getMockSynergiesData, isN8nMockEnabled } from '../../_lib/n8nMock';
 
 /**
  * Mapea un registro de operational_data (esquema n8n) al formato de synergies.
@@ -101,6 +102,7 @@ export async function GET(request: NextRequest) {
     const clusterId = searchParams.get('cluster_id');
     const companyId = searchParams.get('company_id');
     const debug = searchParams.get('debug') === '1';
+    const mockMode = isN8nMockEnabled();
 
     let rows: any[] = [];
     let source = '';
@@ -110,7 +112,7 @@ export async function GET(request: NextRequest) {
     //    con los nombres correctos: companies_involved_json, volume_total_json) ──
     {
       let query = supabaseServer.from('synergies').select('*');
-      if (clusterId) query = query.eq('cluster_id', clusterId);
+      if (clusterId && !mockMode) query = query.eq('cluster_id', clusterId);
 
       const { data, error } = await query.order('created_at', { ascending: false });
 
@@ -124,7 +126,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Si se filtró por cluster_id y devolvió vacío, reintentar sin filtro
-    if (rows.length === 0 && clusterId) {
+    if (rows.length === 0 && clusterId && !mockMode) {
       const { data } = await supabaseServer
         .from('synergies')
         .select('*')
@@ -154,6 +156,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Modo mock: inyectar dataset sintético si Supabase no devuelve datos.
+    if (rows.length === 0 && mockMode) {
+      rows = getMockSynergiesData();
+      source = 'mock_static';
+      usedFallback = true;
+      console.log('[synergies] Fallback mock estático:', rows.length);
+    }
+
     // ── Left-join: resolver UUIDs/códigos en companies_involved_json a nombres ──
     const companyLookup = await buildCompanyLookup();
     if (companyLookup.size > 0) {
@@ -167,7 +177,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Filtrar por company_id dentro de companies_involved_json si se proveyó
-    if (companyId && rows.length > 0) {
+    if (companyId && rows.length > 0 && !mockMode) {
       const nameForId = companyLookup.get(companyId);
       const filtered = rows.filter((s: any) => {
         const involved = s.companies_involved_json;
