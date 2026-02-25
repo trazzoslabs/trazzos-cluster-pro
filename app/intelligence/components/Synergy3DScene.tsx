@@ -56,7 +56,7 @@ function ParticleFlow({ origin, count = 28 }: { origin: THREE.Vector3; count?: n
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={base} count={count} itemSize={3} />
+        <bufferAttribute attach="attributes-position" args={[base, 3]} />
       </bufferGeometry>
       <pointsMaterial color="#9aff8d" size={0.04} sizeAttenuation transparent opacity={0.8} />
     </points>
