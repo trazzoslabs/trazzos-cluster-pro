@@ -209,6 +209,7 @@ export default function IngestionPage() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabaseClient.channel> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionResponseRef = useRef<SessionResponse | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
   const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null; correlationId?: string | null }) => {
@@ -582,24 +583,28 @@ export default function IngestionPage() {
       const result = await response.json();
       const data = result.data || result;
       const dataWithGuaranteedJobId = { ...data, job_id: data?.job_id || generatedJobId };
-      
-      console.log('[handleCreateSession] Datos recibidos:', dataWithGuaranteedJobId);
+
+      sessionResponseRef.current = dataWithGuaranteedJobId;
+
+      console.log('[handleCreateSession] Datos recibidos (upload_id incluido para confirm):', dataWithGuaranteedJobId);
       console.log('%c[V2 Completado] ✓ Sesión creada con éxito — esperando procesamiento de sinergias…', 'color: #9aff8d; font-weight: bold');
-      
+
       setSessionResponse(dataWithGuaranteedJobId);
       setSuccessSession(true);
       setCompletionToast('Procesamiento iniciado');
       setTimeout(() => setCompletionToast(null), 5000);
       setFile(null);
-      
+
       const ids = extractIds(dataWithGuaranteedJobId);
       if (ids.jobId) {
         setJobId(ids.jobId);
         console.log('[handleCreateSession] Job ID extraído:', ids.jobId);
       }
+      if (ids.uploadId) {
+        console.log('[handleCreateSession] Upload ID extraído (para V2-02-DB-Get-Upload-Metadata):', ids.uploadId);
+      }
 
-      // Persistir en localStorage para sobrevivir recargas de página
-      persistTrackingIds({ jobId: ids.jobId, uploadId: ids.uploadId });
+      persistTrackingIds({ jobId: ids.jobId, uploadId: ids.uploadId, correlationId: ids.correlationId });
       
       const url = extractSignedUrl(dataWithGuaranteedJobId);
       if (url) {
@@ -721,12 +726,12 @@ export default function IngestionPage() {
     }, 5_000);
   }, [handleRefreshMarts]);
 
-  // Step 3: Confirm — IDs desde sessionResponse (objeto de sesión recién creado), no desde estado
+  // Step 3: Confirm — IDs desde sesión (ref o estado) para evitar pérdida por re-renders
   const handleConfirm = async () => {
     console.log('[handleConfirm] Iniciando confirmación...');
     setGlobalError(null);
 
-    let effectiveSession = sessionResponse;
+    let effectiveSession = sessionResponseRef.current ?? sessionResponse;
     if (!effectiveSession) {
       try {
         const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
@@ -942,14 +947,26 @@ export default function IngestionPage() {
       const receivedCorrelationId = normalizeTrackingId(
         responseData?.correlation_id ?? sessionResult?.correlation_id,
       );
+      const receivedUploadId = normalizeTrackingId(
+        responseData?.upload_id ?? responseData?.uploadId ?? sessionResult?.upload_id ?? sessionResult?.uploadId,
+      );
       const signedUrlFromSession = responseData?.signed_url;
       if (!receivedJobId || !receivedCorrelationId || !signedUrlFromSession) {
         throw new Error('La sesión no devolvió job_id, correlation_id o signed_url');
       }
+      if (!receivedUploadId) {
+        throw new Error('La sesión no devolvió upload_id (requerido para confirmación)');
+      }
 
-      // Persistencia de IDs de seguimiento para Fase 2 (Confirm)
       setJobId(String(receivedJobId));
       setCorrelationId(String(receivedCorrelationId));
+      sessionResponseRef.current = {
+        job_id: receivedJobId,
+        correlation_id: receivedCorrelationId,
+        upload_id: receivedUploadId,
+        signed_url: signedUrlFromSession,
+      };
+      persistTrackingIds({ jobId: receivedJobId, uploadId: receivedUploadId, correlationId: receivedCorrelationId });
 
       // Fase 2 (Upload): subir archivo a signed_url de storage
       setUploadPhase('uploading');
@@ -963,21 +980,25 @@ export default function IngestionPage() {
         throw new Error(uploadBody || `Error subiendo archivo (${uploadResponse.status})`);
       }
 
-      // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso
+      // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso (upload_id para n8n V2-02-DB-Get-Upload-Metadata)
       setUploadPhase('processing');
       const confirmJobId = normalizeTrackingId(receivedJobId || jobId || '');
       const confirmCorrelationId = normalizeTrackingId(receivedCorrelationId || correlationId || '');
-      if (!confirmJobId || !confirmCorrelationId) {
-        console.error('ERROR: Faltan IDs de seguimiento');
-        throw new Error('Faltan IDs de seguimiento');
+      const confirmUploadId = normalizeTrackingId(receivedUploadId || '');
+      if (!confirmJobId || !confirmCorrelationId || !confirmUploadId) {
+        console.error('ERROR: Faltan IDs de seguimiento', { confirmJobId, confirmCorrelationId, confirmUploadId });
+        throw new Error('Faltan job_id, correlation_id o upload_id para confirmar');
       }
+      const confirmPayload = {
+        job_id: confirmJobId,
+        correlation_id: confirmCorrelationId,
+        upload_id: confirmUploadId,
+      };
+      console.log('[handleUpload] JSON enviado a upload-confirm:', JSON.stringify(confirmPayload));
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          job_id: confirmJobId,
-          correlation_id: confirmCorrelationId,
-        }),
+        body: JSON.stringify(confirmPayload),
       });
 
       if (!confirmResponse.ok) {
@@ -988,11 +1009,12 @@ export default function IngestionPage() {
       setSessionResponse({
         job_id: confirmJobId,
         correlation_id: confirmCorrelationId,
+        upload_id: confirmUploadId,
         signed_url: signedUrlFromSession,
       });
       setSuccessSession(true);
       setFile(null);
-      persistTrackingIds({ jobId: confirmJobId });
+      persistTrackingIds({ jobId: confirmJobId, uploadId: confirmUploadId, correlationId: confirmCorrelationId });
       fetchRecentJobs();
     } catch (err) {
       console.log('[upload] error:', err);

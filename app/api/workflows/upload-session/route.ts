@@ -127,6 +127,32 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('n8n no devolvió signed_url', 502, generatedCorrelationId);
     }
 
+    const uploadIdRaw =
+      data?.upload_id ??
+      data?.uploadId ??
+      data?.data?.upload_id ??
+      data?.data?.uploadId;
+    let upload_id = typeof uploadIdRaw === 'string' ? uploadIdRaw.trim() : '';
+
+    if (!upload_id) {
+      safeLog('[upload-session] n8n no devolvió upload_id; creando registro en uploads para persistir ID');
+      const newUploadId = crypto.randomUUID();
+      const { error: uploadInsertErr } = await supabaseServer.from('uploads').insert({
+        upload_id: newUploadId,
+        company_id: companyId,
+        uploader_user_id: userId,
+        file_name: fileName,
+        file_type: fileType,
+        declared_dataset_type: datasetType,
+        status: 'pending',
+      });
+      if (uploadInsertErr) {
+        safeError('[upload-session] Error insertando uploads:', uploadInsertErr);
+        return createErrorResponse('No se pudo registrar el upload', 500, generatedCorrelationId);
+      }
+      upload_id = newUploadId;
+    }
+
     const { error: insertErr } = await supabaseServer
       .from('ingestion_jobs')
       .insert({
@@ -140,11 +166,12 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500, generatedCorrelationId);
     }
 
-    safeLog('[upload-session] ← %d OK', response.status);
+    safeLog('[upload-session] ← %d OK job_id=%s upload_id=%s', response.status, generatedJobId, upload_id);
     return createSuccessResponse(
       {
         job_id: generatedJobId,
         correlation_id: generatedCorrelationId,
+        upload_id,
         signed_url: signedUrl,
       },
       200,

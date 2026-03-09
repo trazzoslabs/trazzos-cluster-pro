@@ -6,10 +6,15 @@ const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
 const INVALID_ID_VALUES = new Set(['', 'undefined', 'null']);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isInvalidId(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return INVALID_ID_VALUES.has(normalized) || normalized.length === 0;
+}
+
+function isValidUUID(value: string): boolean {
+  return UUID_REGEX.test(value.trim());
 }
 
 export async function POST(request: NextRequest) {
@@ -27,8 +32,10 @@ export async function POST(request: NextRequest) {
 
     const rawJobId = body?.job_id;
     const rawCorrelationId = body?.correlation_id;
+    const rawUploadId = body?.upload_id ?? body?.uploadId;
     const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : String(rawJobId ?? '').trim();
     const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
+    const uploadIdValue = typeof rawUploadId === 'string' ? rawUploadId.trim() : String(rawUploadId ?? '').trim();
 
     // Validación estricta: rechazar antes de llamar a n8n
     if (isInvalidId(jobId)) {
@@ -39,14 +46,23 @@ export async function POST(request: NextRequest) {
       console.error('[upload-confirm] 400: correlation_id inválido o ausente', { received: rawCorrelationId });
       return createErrorResponse('correlation_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
     }
+    if (isInvalidId(uploadIdValue)) {
+      console.error('[upload-confirm] 400: upload_id inválido o ausente', { received: rawUploadId });
+      return createErrorResponse('upload_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    }
+    if (!isValidUUID(uploadIdValue)) {
+      console.error('[upload-confirm] 400: upload_id no es un UUID válido', { received: uploadIdValue });
+      return createErrorResponse('upload_id debe ser un UUID válido', 400);
+    }
 
     const finalPayload = {
       job_id: jobId,
       correlation_id: correlationIdValue,
+      upload_id: uploadIdValue,
       id: jobId,
       external_id: jobId,
       uuid: jobId,
-      data: { job_id: jobId },
+      data: { job_id: jobId, upload_id: uploadIdValue },
     };
     const correlationId = finalPayload.correlation_id;
 
@@ -62,9 +78,9 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[upload-confirm] URL de confirmación:', url);
-    console.log('[upload-confirm] job_id=%s correlation_id=%s', finalPayload.job_id, finalPayload.correlation_id);
+    console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id);
     const payloadJson = JSON.stringify(finalPayload);
-    console.log('[upload-confirm] JSON exacto enviado a n8n (body):', payloadJson);
+    console.log('[upload-confirm] JSON exacto enviado a n8n (body, upload_id incluido):', payloadJson);
 
     const response = await fetchWithTimeout(url, {
       method: 'POST',
