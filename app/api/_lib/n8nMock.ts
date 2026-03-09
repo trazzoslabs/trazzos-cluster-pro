@@ -24,9 +24,9 @@ export const COMPANY_AJOVER = 'COMPANY_004';
 export const COMPANY_ESENTTIA = 'COMPANY_005';
 export const COMPANY_CABOT = 'COMPANY_006';
 
+/** Siempre false: validación con backend real (Supabase/n8n). No se inyectan datos de prueba. */
 export function isN8nMockEnabled(): boolean {
-  // Default ON for prototype navigation; set N8N_MOCK_MODE=false to disable.
-  return process.env.N8N_MOCK_MODE !== 'false';
+  return false;
 }
 
 export async function waitForMockLatency(): Promise<void> {

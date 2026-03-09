@@ -1,10 +1,9 @@
 /**
  * Servicio de acceso a datos de sinergias.
- * Prioridad: tabla synergies → operational_data → n8n mock (solo como última instancia).
+ * Prioridad: tabla synergies → operational_data. Sin datos en Supabase se retorna [].
  */
 
 import { supabaseServer } from '@/app/api/_lib/supabaseServer';
-import { getMockSynergiesData, isN8nMockEnabled } from '@/app/api/_lib/n8nMock';
 import type { CompaniesInvolvedJson } from '@/lib/types/synergies';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,7 +107,6 @@ export interface GetSynergiesResult {
 
 export async function getSynergies(options: GetSynergiesOptions = {}): Promise<GetSynergiesResult> {
   const { clusterId, companyId, debug = false } = options;
-  const mockMode = isN8nMockEnabled();
 
   let rows: Array<Record<string, unknown>> = [];
   let source = '';
@@ -116,7 +114,7 @@ export async function getSynergies(options: GetSynergiesOptions = {}): Promise<G
 
   // Fuente 1: tabla synergies (Supabase)
   let query = supabaseServer.from('synergies').select('*');
-  if (clusterId && !mockMode) query = query.eq('cluster_id', clusterId);
+  if (clusterId) query = query.eq('cluster_id', clusterId);
 
   const { data, error } = await query.order('created_at', { ascending: false });
 
@@ -128,7 +126,7 @@ export async function getSynergies(options: GetSynergiesOptions = {}): Promise<G
   }
 
   // Reintentar sin filtro cluster_id si vacío
-  if (rows.length === 0 && clusterId && !mockMode) {
+  if (rows.length === 0 && clusterId) {
     const { data: dataNoFilter } = await supabaseServer
       .from('synergies')
       .select('*')
@@ -154,13 +152,6 @@ export async function getSynergies(options: GetSynergiesOptions = {}): Promise<G
     }
   }
 
-  // Última instancia: n8n mock solo si todo lo anterior está vacío
-  if (rows.length === 0 && mockMode) {
-    rows = getMockSynergiesData() as Array<Record<string, unknown>>;
-    source = 'mock_static';
-    usedFallback = true;
-  }
-
   const companyLookup = await buildCompanyLookup();
   if (companyLookup.size > 0) {
     rows = rows.map((row) => ({
@@ -172,7 +163,7 @@ export async function getSynergies(options: GetSynergiesOptions = {}): Promise<G
     }));
   }
 
-  if (companyId && rows.length > 0 && !mockMode) {
+  if (companyId && rows.length > 0) {
     const nameForId = companyLookup.get(companyId);
     const filtered = rows.filter((s) => {
       const involved = s.companies_involved_json;

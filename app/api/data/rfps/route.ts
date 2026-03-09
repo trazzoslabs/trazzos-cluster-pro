@@ -1,22 +1,18 @@
 import { NextRequest } from 'next/server';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
-import { getMockRfpsData, isN8nMockEnabled } from '../../_lib/n8nMock';
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const synergyId = searchParams.get('synergy_id');
 
-    const mockMode = isN8nMockEnabled();
-
     let query = supabaseServer.from('rfps').select('*');
 
-    if (synergyId && !mockMode) {
+    if (synergyId) {
       query = query.eq('synergy_id', synergyId);
     }
 
-    // Ordenar por closing_at (NOT NULL según schema)
     const { data, error } = await query.order('closing_at', { ascending: false });
 
     if (error) {
@@ -24,12 +20,7 @@ export async function GET(request: NextRequest) {
       return createErrorResponse('Failed to fetch rfps', 500);
     }
 
-    let rows = data || [];
-    if (rows.length === 0 && mockMode) {
-      rows = getMockRfpsData();
-    }
-
-    return createSuccessResponse(rows);
+    return createSuccessResponse(data ?? []);
   } catch (error) {
     console.error('Unexpected error in GET /api/data/rfps:', error);
     return createErrorResponse('Internal server error', 500);
