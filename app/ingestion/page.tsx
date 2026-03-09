@@ -275,7 +275,15 @@ export default function IngestionPage() {
     } catch { /* noop */ }
   };
 
-  // Load user profile on mount + restore persisted tracking IDs
+  // Consultas de estado usan solo job_id (UUID) como llave. correlation_id es solo metadato de auditoría.
+  const getTrackedJobId = useCallback((): string | null => {
+    const raw = jobIdRef.current ?? jobId ?? (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null);
+    const id = typeof raw === 'string' ? raw.trim() : '';
+    if (!id || id.toLowerCase() === 'undefined' || id.toLowerCase() === 'null') return null;
+    return id;
+  }, [jobId]);
+
+  // Load user profile on mount + restore persisted tracking IDs (solo job_id para estado; correlation_id no se usa para búsqueda)
   useEffect(() => {
     fetchUserProfile();
     fetchRecentJobs();
@@ -283,14 +291,16 @@ export default function IngestionPage() {
     try {
       const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
       const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
-      if (savedJobId) {
-        setJobId(savedJobId);
+      const validJobId = savedJobId?.trim() && savedJobId.toLowerCase() !== 'undefined' ? savedJobId : null;
+      if (validJobId) {
+        jobIdRef.current = validJobId;
+        setJobId(validJobId);
         startJobPolling();
       }
-      if (savedUploadId || savedJobId) {
+      if (savedUploadId || validJobId) {
         setSessionResponse((prev) => prev ?? {
           upload_id: savedUploadId || undefined,
-          job_id: savedJobId || undefined,
+          job_id: validJobId ?? undefined,
         });
       }
     } catch { /* noop */ }
@@ -327,6 +337,7 @@ export default function IngestionPage() {
     }
   };
 
+  // Listado de jobs: API usa job_id cuando se consulta uno; aquí traemos todos. Sin correlation_id como llave.
   const fetchRecentJobs = async () => {
     try {
       setLoadingJobs(true);
@@ -391,6 +402,7 @@ export default function IngestionPage() {
     setTimeout(() => setCompletionToast(null), 8000);
   }, [handleRefreshMarts]);
 
+  // Polling de estado: solo job_id identifica cada job. correlation_id no se usa para búsqueda (evita 'undefined' si el flujo se reinició).
   const startJobPolling = useCallback(() => {
     if (pollingRef.current) return;
 
@@ -428,9 +440,9 @@ export default function IngestionPage() {
     }, 10_000);
   }, [runJobCompletedLogic]);
 
-  // Suscripción Realtime a ingestion_jobs (reemplaza polling para el job seguido)
+  // Suscripción Realtime: solo job_id (UUID) como llave de búsqueda. correlation_id no se usa aquí (es auditoría).
   useEffect(() => {
-    const trackedId = jobIdRef.current ?? jobId ?? (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null);
+    const trackedId = getTrackedJobId();
     if (!trackedId) return;
 
     const channel = supabaseClient
@@ -462,7 +474,7 @@ export default function IngestionPage() {
       channel.unsubscribe();
       realtimeChannelRef.current = null;
     };
-  }, [jobId, runJobCompletedLogic]);
+  }, [jobId, runJobCompletedLogic, getTrackedJobId]);
 
   const handleForceComplete = useCallback(async (forceJobId: string) => {
     try {
