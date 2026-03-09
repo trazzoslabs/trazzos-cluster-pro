@@ -66,6 +66,7 @@ export async function getCompaniesGeo(): Promise<GeoCompany[]> {
     }
 
     // Estrategia 1: company_sites + companies
+    // Supabase puede devolver la relación companies como objeto o como array.
     if (result.length === 0) {
       const { data: sites, error: sitesError } = await supabaseServer
         .from('company_sites')
@@ -87,20 +88,37 @@ export async function getCompaniesGeo(): Promise<GeoCompany[]> {
         .not('lng', 'is', null);
 
       if (!sitesError && sites && sites.length > 0) {
-        for (const site of sites as Array<Record<string, unknown> & { companies?: Record<string, unknown> }>) {
-          const company = site.companies;
+        type SiteRow = Record<string, unknown> & {
+          site_id?: unknown;
+          company_id?: unknown;
+          site_name?: unknown;
+          lat?: unknown;
+          lng?: unknown;
+          city?: unknown;
+          companies?: unknown;
+        };
+        for (const site of sites as SiteRow[]) {
+          const rawCompanies = site.companies;
+          const company =
+            rawCompanies == null
+              ? undefined
+              : Array.isArray(rawCompanies)
+                ? (rawCompanies[0] as Record<string, unknown> | undefined)
+                : (rawCompanies as Record<string, unknown>);
+
           const lat = Number(site.lat);
           const lng = Number(site.lng);
           if (isNaN(lat) || isNaN(lng)) continue;
+
           addCompany({
-            id: (site.company_id ?? site.site_id) as string,
-            name: (company?.name ?? site.site_name ?? 'Empresa') as string,
+            id: String(site.company_id ?? site.site_id ?? ''),
+            name: String(company?.name ?? site.site_name ?? 'Empresa'),
             lat,
             lng,
-            category: site.city as string,
-            status: company?.status as string,
-            company_id: site.company_id as string,
-            site_id: site.site_id as string,
+            category: site.city != null ? String(site.city) : undefined,
+            status: company?.status != null ? String(company.status) : undefined,
+            company_id: site.company_id != null ? String(site.company_id) : undefined,
+            site_id: site.site_id != null ? String(site.site_id) : undefined,
           });
         }
       }
