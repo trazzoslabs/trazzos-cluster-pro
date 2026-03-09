@@ -43,18 +43,26 @@ export function extractVolumeTotal(v: VolumeTotalJsonValue): number {
   return Number(v) || 0;
 }
 
+/** Objeto con propiedades opcionales de empresa (para narrowing en companyEntryName) */
+interface CompanyEntryObject {
+  name?: string;
+  company_name?: string;
+  short_name?: string;
+  company_id?: string;
+  id?: string;
+}
+
 /**
  * Obtiene nombre legible de una entrada de companies_involved_json.
+ * Retorna siempre string; usa ?? para precedencia clara (sin mezclar con ||).
  */
 export function companyEntryName(entry: CompaniesInvolvedEntry): string {
   if (typeof entry === 'string') return entry;
   if (typeof entry === 'object' && entry !== null) {
-    return (
-      entry.name ??
-      entry.company_name ??
-      (entry.company_id ?? entry.id ?? '') ||
-      ''
-    );
+    const obj = entry as CompanyEntryObject;
+    const value =
+      obj.name ?? obj.company_name ?? obj.short_name ?? obj.company_id ?? obj.id ?? '';
+    return typeof value === 'string' ? value : String(value);
   }
   return String(entry ?? '');
 }
@@ -64,7 +72,8 @@ export function companyEntryName(entry: CompaniesInvolvedEntry): string {
  */
 export function companyEntryId(entry: CompaniesInvolvedEntry): string | null {
   if (typeof entry === 'object' && entry !== null) {
-    const id = entry.company_id ?? entry.id ?? null;
+    const obj = entry as CompanyEntryObject;
+    const id = obj.company_id ?? obj.id ?? null;
     return typeof id === 'string' && id ? id : null;
   }
   return null;
