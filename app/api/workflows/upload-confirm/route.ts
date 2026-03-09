@@ -74,16 +74,24 @@ export async function POST(request: NextRequest) {
     const rawUserEmail = body?.user_email ?? body?.userEmail;
     const rawAppUrl = body?.app_url ?? body?.appUrl;
     const rawSampleData = body?.sample_data ?? body?.sampleData;
+    const rawDatasetType = body?.dataset_type ?? body?.datasetType;
     const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
     const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
+    const dataset_type = typeof rawDatasetType === 'string' ? rawDatasetType.trim() : '';
     const sample_data = Array.isArray(rawSampleData)
       ? rawSampleData.slice(0, 10)
       : undefined;
 
-    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data en data)
+    if (isInvalidTrackingValue(dataset_type)) {
+      console.error('[upload-confirm] 400: dataset_type vacío', { received: rawDatasetType });
+      return createErrorResponse('Dataset type missing', 400);
+    }
+
+    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data, dataset_type en data)
     const dataPayload: Record<string, unknown> = {
       job_id: jobId,
       upload_id: uploadIdValue,
+      dataset_type,
       ...(user_email && { user_email }),
       ...(app_url && { app_url }),
       ...(sample_data != null && sample_data.length > 0 && { sample_data }),
@@ -92,6 +100,7 @@ export async function POST(request: NextRequest) {
       job_id: jobId,
       correlation_id: correlationIdValue,
       upload_id: uploadIdValue,
+      dataset_type,
       ...(user_email && { user_email }),
       ...(app_url && { app_url }),
       id: jobId,
@@ -115,6 +124,7 @@ export async function POST(request: NextRequest) {
     console.log('[upload-confirm] URL de confirmación:', url);
     console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id);
     console.log('[V2-05-Check] Enviando JobID a n8n: %s', jobId);
+    console.log('[Payload-Debug]', JSON.stringify(finalPayload, null, 2));
     const payloadJson = JSON.stringify(finalPayload);
     console.log('[upload-confirm] JSON exacto enviado a n8n (body, upload_id incluido):', payloadJson);
 
