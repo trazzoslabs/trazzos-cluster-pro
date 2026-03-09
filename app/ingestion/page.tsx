@@ -131,6 +131,51 @@ export default function IngestionPage() {
     }
   };
 
+  /**
+   * Extrae las primeras 3 filas del archivo (JSON, JSONL o CSV) para sample_data.
+   * Devuelve array de objetos para que n8n Workflow 3 pueda usar sugerencias de mapeo.
+   */
+  const extractSampleDataFromFile = async (inputFile: File): Promise<Record<string, unknown>[] | null> => {
+    const ext = inputFile.name.split('.').pop()?.toLowerCase();
+    try {
+      const text = await inputFile.text();
+      if (ext === 'csv') {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length === 0) return null;
+        const delimiter = lines[0].includes(';') ? ';' : ',';
+        const headers = lines[0].split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
+        const rows: Record<string, unknown>[] = [];
+        for (let i = 1; i < Math.min(4, lines.length); i++) {
+          const values = lines[i].split(delimiter);
+          const obj: Record<string, unknown> = {};
+          headers.forEach((h, j) => { obj[h] = values[j]?.trim().replace(/^"|"$/g, '') ?? ''; });
+          rows.push(obj);
+        }
+        return rows.length ? rows : null;
+      }
+      if (ext === 'jsonl') {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const out: Record<string, unknown>[] = [];
+        for (let i = 0; i < Math.min(3, lines.length); i++) {
+          try {
+            const parsed = JSON.parse(lines[i]) as Record<string, unknown>;
+            if (parsed && typeof parsed === 'object') out.push(parsed);
+          } catch { /* skip invalid line */ }
+        }
+        return out.length ? out : null;
+      }
+      if (ext === 'json') {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed.slice(0, 3).filter((x) => x && typeof x === 'object') as Record<string, unknown>[];
+        if (parsed && typeof parsed === 'object') return [parsed as Record<string, unknown>];
+        return null;
+      }
+    } catch (e) {
+      console.warn('[extractSampleDataFromFile] Error leyendo archivo:', e);
+    }
+    return null;
+  };
+
   const csvEscape = (value: unknown): string => {
     const str = String(value ?? '');
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
@@ -210,6 +255,7 @@ export default function IngestionPage() {
   const realtimeChannelRef = useRef<ReturnType<typeof supabaseClient.channel> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionResponseRef = useRef<SessionResponse | null>(null);
+  const sampleDataRef = useRef<Record<string, unknown>[] | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
   const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null; correlationId?: string | null }) => {
@@ -734,6 +780,16 @@ export default function IngestionPage() {
   const handleConfirm = async (sessionSnapshot?: SessionResponse | null) => {
     console.log('[handleConfirm] Iniciando confirmación...', sessionSnapshot ? '(con snapshot de sesión)' : '(ref/estado)');
     setGlobalError(null);
+    setErrorConfirm(null);
+
+    // Validación pre-vuelo: user_email requerido para Workflow 3 (objeto de perfil, no null)
+    const effectiveEmail = (userEmail ?? '').trim();
+    if (!effectiveEmail) {
+      const aviso = 'Debe iniciar sesión nuevamente para obtener su identidad antes de confirmar la carga.';
+      setErrorConfirm(aviso);
+      setGlobalError('No se pudo obtener su email. ' + aviso);
+      return;
+    }
 
     let effectiveSession: SessionResponse | null = null;
 
@@ -808,13 +864,17 @@ export default function IngestionPage() {
       setErrorConfirm(null);
       setSuccessConfirm(false);
 
+      const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : (appUrl?.trim() || '');
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,
         correlation_id: correlationIdStr,
         cluster_id: FIXED_CLUSTER_ID,
-        user_email: userEmail.trim() || 'user@example.com',
-        app_url: appUrl.trim() || undefined,
+        user_email: effectiveEmail,
+        app_url: effectiveAppUrl || undefined,
+        ...(sampleDataRef.current?.length && { sample_data: sampleDataRef.current }),
       };
 
       const payloadJson = JSON.stringify(payload);
@@ -930,6 +990,13 @@ export default function IngestionPage() {
         throw new Error(`Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`);
       }
 
+      // Captura de sample_data: primeras 3 filas (JSON/CSV/JSONL) para Workflow 3 (sugerencias de mapeo)
+      const sample_data = await extractSampleDataFromFile(file);
+      sampleDataRef.current = sample_data;
+      if (sample_data?.length) {
+        console.log('[handleUpload] sample_data extraído (filas):', sample_data.length);
+      }
+
       // Fase 1 (Session): pedir signed_url + IDs al proxy
       const formData = new FormData();
       formData.append('file', file, file.name);
@@ -991,7 +1058,13 @@ export default function IngestionPage() {
         throw new Error(uploadBody || `Error subiendo archivo (${uploadResponse.status})`);
       }
 
-      // Fase 3 (Confirm - V2-02): confirmar después del upload exitoso (upload_id para n8n V2-02-DB-Get-Upload-Metadata)
+      // Fase 3 (Confirm - V2-02 / Workflow 3): metadatos de usuario requeridos por n8n
+      const confirmEmail = (userEmail ?? '').trim();
+      if (!confirmEmail) {
+        setGlobalError('No se pudo obtener su email. Debe iniciar sesión nuevamente para obtener su identidad antes de confirmar la carga.');
+        setUploadPhase('idle');
+        return;
+      }
       setUploadPhase('processing');
       const confirmJobId = normalizeTrackingId(receivedJobId || jobId || '');
       const confirmCorrelationId = normalizeTrackingId(receivedCorrelationId || correlationId || '');
@@ -1000,10 +1073,14 @@ export default function IngestionPage() {
         console.error('ERROR: Faltan IDs de seguimiento', { confirmJobId, confirmCorrelationId, confirmUploadId });
         throw new Error('Faltan job_id, correlation_id o upload_id para confirmar');
       }
+      const confirmAppUrl = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : (appUrl?.trim() || '');
       const confirmPayload = {
         job_id: confirmJobId,
         correlation_id: confirmCorrelationId,
         upload_id: confirmUploadId,
+        user_email: confirmEmail,
+        app_url: confirmAppUrl || undefined,
+        ...(sample_data && sample_data.length > 0 && { sample_data }),
       };
       console.log('[handleUpload] JSON enviado a upload-confirm:', JSON.stringify(confirmPayload));
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {

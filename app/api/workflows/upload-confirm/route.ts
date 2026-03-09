@@ -66,15 +66,33 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('upload_id debe ser un UUID válido', 400);
     }
 
-    // Payload a n8n con nombres exactos en snake_case (Workflow 2 espera upload_id, job_id, correlation_id)
+    const rawUserEmail = body?.user_email ?? body?.userEmail;
+    const rawAppUrl = body?.app_url ?? body?.appUrl;
+    const rawSampleData = body?.sample_data ?? body?.sampleData;
+    const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
+    const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
+    const sample_data = Array.isArray(rawSampleData)
+      ? rawSampleData.slice(0, 10)
+      : undefined;
+
+    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data en data)
+    const dataPayload: Record<string, unknown> = {
+      job_id: jobId,
+      upload_id: uploadIdValue,
+      ...(user_email && { user_email }),
+      ...(app_url && { app_url }),
+      ...(sample_data != null && sample_data.length > 0 && { sample_data }),
+    };
     const finalPayload = {
       job_id: jobId,
       correlation_id: correlationIdValue,
       upload_id: uploadIdValue,
+      ...(user_email && { user_email }),
+      ...(app_url && { app_url }),
       id: jobId,
       external_id: jobId,
       uuid: jobId,
-      data: { job_id: jobId, upload_id: uploadIdValue },
+      data: dataPayload,
     };
     const correlationId = finalPayload.correlation_id;
 
