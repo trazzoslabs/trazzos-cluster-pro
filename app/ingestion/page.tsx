@@ -255,6 +255,7 @@ export default function IngestionPage() {
   const realtimeChannelRef = useRef<ReturnType<typeof supabaseClient.channel> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionResponseRef = useRef<SessionResponse | null>(null);
+  const jobIdRef = useRef<string | null>(null);
   const sampleDataRef = useRef<Record<string, unknown>[] | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
@@ -429,7 +430,7 @@ export default function IngestionPage() {
 
   // Suscripción Realtime a ingestion_jobs (reemplaza polling para el job seguido)
   useEffect(() => {
-    const trackedId = jobId ?? (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null);
+    const trackedId = jobIdRef.current ?? jobId ?? (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null);
     if (!trackedId) return;
 
     const channel = supabaseClient
@@ -632,6 +633,14 @@ export default function IngestionPage() {
 
       sessionResponseRef.current = dataWithGuaranteedJobId;
 
+      const ids = extractIds(dataWithGuaranteedJobId);
+      const resolvedJobId = ids.jobId ?? dataWithGuaranteedJobId?.job_id ?? generatedJobId;
+      jobIdRef.current = resolvedJobId ?? null;
+      if (ids.jobId) {
+        setJobId(ids.jobId);
+        console.log('[handleCreateSession] Job ID extraído (estado + ref):', ids.jobId);
+      }
+
       console.log('[handleCreateSession] Datos recibidos (upload_id incluido para confirm):', dataWithGuaranteedJobId);
       console.log('%c[V2 Completado] ✓ Sesión creada con éxito — esperando procesamiento de sinergias…', 'color: #9aff8d; font-weight: bold');
 
@@ -640,12 +649,6 @@ export default function IngestionPage() {
       setCompletionToast('Procesamiento iniciado');
       setTimeout(() => setCompletionToast(null), 5000);
       setFile(null);
-
-      const ids = extractIds(dataWithGuaranteedJobId);
-      if (ids.jobId) {
-        setJobId(ids.jobId);
-        console.log('[handleCreateSession] Job ID extraído:', ids.jobId);
-      }
       if (ids.uploadId) {
         console.log('[handleCreateSession] Upload ID extraído (para V2-02-DB-Get-Upload-Metadata):', ids.uploadId);
       }
@@ -831,7 +834,7 @@ export default function IngestionPage() {
     }
 
     const ids = extractIds(effectiveSession);
-    const canonicalJobId = sessionSnapshot ? ids.jobId : (ids.jobId ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId());
+    const canonicalJobId = sessionSnapshot ? ids.jobId : (ids.jobId ?? jobIdRef.current ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId());
     const canonicalUploadId = sessionSnapshot ? ids.uploadId : (ids.uploadId ?? localStorage.getItem('trazzos_tracked_upload_id'));
     const canonicalCorrelationId = sessionSnapshot ? ids.correlationId : (ids.correlationId ?? correlationId ?? localStorage.getItem('trazzos_tracked_correlation_id'));
 
@@ -865,7 +868,7 @@ export default function IngestionPage() {
       setSuccessConfirm(false);
 
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
-        ? window.location.origin
+        ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
       const payload = {
         upload_id: uploadIdStr,
@@ -1036,6 +1039,7 @@ export default function IngestionPage() {
         throw new Error('La sesión no devolvió upload_id (requerido para confirmación)');
       }
 
+      jobIdRef.current = receivedJobId;
       setJobId(String(receivedJobId));
       setCorrelationId(String(receivedCorrelationId));
       sessionResponseRef.current = {
@@ -1066,14 +1070,15 @@ export default function IngestionPage() {
         return;
       }
       setUploadPhase('processing');
-      const confirmJobId = normalizeTrackingId(receivedJobId || jobId || '');
+      const explicitJobId = jobIdRef.current ?? receivedJobId ?? jobId ?? '';
+      const confirmJobId = normalizeTrackingId(explicitJobId);
       const confirmCorrelationId = normalizeTrackingId(receivedCorrelationId || correlationId || '');
       const confirmUploadId = normalizeTrackingId(receivedUploadId || '');
       if (!confirmJobId || !confirmCorrelationId || !confirmUploadId) {
         console.error('ERROR: Faltan IDs de seguimiento', { confirmJobId, confirmCorrelationId, confirmUploadId });
         throw new Error('Faltan job_id, correlation_id o upload_id para confirmar');
       }
-      const confirmAppUrl = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : (appUrl?.trim() || '');
+      const confirmAppUrl = typeof window !== 'undefined' && window.location?.origin ? `${window.location.origin}/ingestion` : (appUrl?.trim() || '');
       const confirmPayload = {
         job_id: confirmJobId,
         correlation_id: confirmCorrelationId,

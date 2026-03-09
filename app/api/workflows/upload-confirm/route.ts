@@ -66,6 +66,11 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('upload_id debe ser un UUID válido', 400);
     }
 
+    if (jobId === 'undefined') {
+      console.error('[upload-confirm] 400: job_id es la cadena literal "undefined"');
+      return createErrorResponse('job_id no puede ser la cadena literal "undefined"', 400);
+    }
+
     const rawUserEmail = body?.user_email ?? body?.userEmail;
     const rawAppUrl = body?.app_url ?? body?.appUrl;
     const rawSampleData = body?.sample_data ?? body?.sampleData;
@@ -109,6 +114,7 @@ export async function POST(request: NextRequest) {
 
     console.log('[upload-confirm] URL de confirmación:', url);
     console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id);
+    console.log('[V2-05-Check] Enviando JobID a n8n: %s', jobId);
     const payloadJson = JSON.stringify(finalPayload);
     console.log('[upload-confirm] JSON exacto enviado a n8n (body, upload_id incluido):', payloadJson);
 
