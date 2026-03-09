@@ -5,21 +5,41 @@ const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
+const INVALID_ID_VALUES = new Set(['', 'undefined', 'null']);
+
+function isInvalidId(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return INVALID_ID_VALUES.has(normalized) || normalized.length === 0;
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (!N8N_CONFIRM_WEBHOOK_URL && !N8N_WEBHOOK_BASE) {
       return createErrorResponse('N8N_CONFIRM_WEBHOOK_URL or N8N_WEBHOOK_BASE environment variable is not set', 500);
     }
 
-    let body;
+    let body: Record<string, unknown>;
     try {
       body = await request.json();
     } catch (error) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const jobId = String(body?.job_id ?? '').trim();
-    const correlationIdValue = String(body?.correlation_id ?? '').trim();
+    const rawJobId = body?.job_id;
+    const rawCorrelationId = body?.correlation_id;
+    const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : String(rawJobId ?? '').trim();
+    const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
+
+    // Validación estricta: rechazar antes de llamar a n8n
+    if (isInvalidId(jobId)) {
+      console.error('[upload-confirm] 400: job_id inválido o ausente', { received: rawJobId });
+      return createErrorResponse('job_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    }
+    if (isInvalidId(correlationIdValue)) {
+      console.error('[upload-confirm] 400: correlation_id inválido o ausente', { received: rawCorrelationId });
+      return createErrorResponse('correlation_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    }
+
     const finalPayload = {
       job_id: jobId,
       correlation_id: correlationIdValue,
@@ -28,19 +48,7 @@ export async function POST(request: NextRequest) {
       uuid: jobId,
       data: { job_id: jobId },
     };
-    const correlationId = finalPayload?.correlation_id;
-
-    const hasInvalidIds =
-      !finalPayload?.job_id ||
-      !finalPayload?.correlation_id ||
-      finalPayload.job_id.toLowerCase() === 'undefined' ||
-      finalPayload.correlation_id.toLowerCase() === 'undefined' ||
-      finalPayload.job_id.toLowerCase() === 'null' ||
-      finalPayload.correlation_id.toLowerCase() === 'null';
-    if (hasInvalidIds) {
-      console.error('[upload-confirm] ERROR: Faltan IDs de seguimiento');
-      return createErrorResponse('job_id y correlation_id son requeridos para confirmar workflow', 400, correlationId);
-    }
+    const correlationId = finalPayload.correlation_id;
 
     const baseConfirmUrl = N8N_CONFIRM_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
     const url = `${baseConfirmUrl}?job_id=${encodeURIComponent(jobId)}&correlation_id=${encodeURIComponent(correlationIdValue)}`;
@@ -53,14 +61,10 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    console.log(
-      '[upload-confirm] → POST %s  job_id=%s correlation_id=%s',
-      url,
-      finalPayload?.job_id,
-      finalPayload?.correlation_id,
-    );
-    console.log('URL de Confirmación enviada:', url);
-    console.log('PAYLOAD FINAL ENVIADO A N8N:', JSON.stringify(finalPayload));
+    console.log('[upload-confirm] URL de confirmación:', url);
+    console.log('[upload-confirm] job_id=%s correlation_id=%s', finalPayload.job_id, finalPayload.correlation_id);
+    const payloadJson = JSON.stringify(finalPayload);
+    console.log('[upload-confirm] JSON exacto enviado a n8n (body):', payloadJson);
 
     const response = await fetchWithTimeout(url, {
       method: 'POST',

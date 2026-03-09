@@ -97,14 +97,22 @@ export default function IngestionPage() {
   };
 
   const extractIds = (response: SessionResponse) => {
-    const jobIdKeys = ['job_id', 'jobId', 'jobId'];
-    const uploadIdKeys = ['upload_id', 'uploadId', 'uploadId'];
+    const jobIdKeys = ['job_id', 'jobId'];
+    const uploadIdKeys = ['upload_id', 'uploadId'];
+    const correlationIdKeys = ['correlation_id', 'correlationId'];
     const hashKeys = ['hash', 'payload_hash', 'payload_hash_sha256'];
     return {
       jobId: findNestedValue(response, jobIdKeys),
       uploadId: findNestedValue(response, uploadIdKeys),
+      correlationId: findNestedValue(response, correlationIdKeys),
       hash: findNestedValue(response, hashKeys),
     };
+  };
+
+  const isInvalidTrackingId = (value: string | null | undefined): boolean => {
+    if (value == null) return true;
+    const s = String(value).trim().toLowerCase();
+    return s === '' || s === 'undefined' || s === 'null';
   };
 
   const extractSignedUrl = (response: SessionResponse): string | null => {
@@ -203,10 +211,11 @@ export default function IngestionPage() {
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
-  const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null }) => {
+  const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null; correlationId?: string | null }) => {
     try {
       if (ids.jobId) localStorage.setItem('trazzos_tracked_job_id', ids.jobId);
       if (ids.uploadId) localStorage.setItem('trazzos_tracked_upload_id', ids.uploadId);
+      if (ids.correlationId) localStorage.setItem('trazzos_tracked_correlation_id', ids.correlationId);
     } catch { /* quota exceeded o SSR */ }
   };
 
@@ -214,6 +223,7 @@ export default function IngestionPage() {
     try {
       localStorage.removeItem('trazzos_tracked_job_id');
       localStorage.removeItem('trazzos_tracked_upload_id');
+      localStorage.removeItem('trazzos_tracked_correlation_id');
     } catch { /* noop */ }
   };
 
@@ -711,24 +721,25 @@ export default function IngestionPage() {
     }, 5_000);
   }, [handleRefreshMarts]);
 
-  // Step 3: Confirm
+  // Step 3: Confirm — IDs desde sessionResponse (objeto de sesión recién creado), no desde estado
   const handleConfirm = async () => {
     console.log('[handleConfirm] Iniciando confirmación...');
     setGlobalError(null);
- 
-    // Fallback local: reconstruir sesión desde localStorage si el estado se perdió.
+
     let effectiveSession = sessionResponse;
     if (!effectiveSession) {
       try {
         const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
         const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
+        const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
         if (savedUploadId || savedJobId) {
           effectiveSession = {
             upload_id: savedUploadId || undefined,
             job_id: savedJobId || undefined,
+            correlation_id: savedCorrelationId || undefined,
           };
           setSessionResponse(effectiveSession);
-          console.warn('[handleConfirm] Sesión reconstruida localmente desde localStorage');
+          console.warn('[handleConfirm] Sesión reconstruida desde localStorage');
         }
       } catch { /* noop */ }
     }
@@ -748,17 +759,33 @@ export default function IngestionPage() {
     }
 
     const ids = extractIds(effectiveSession);
-    if (!ids.uploadId) {
-      const errorMsg = 'Falta upload_id en respuesta de sesión.';
-      setErrorConfirm(errorMsg);
-      setGlobalError(errorMsg);
+    const canonicalJobId = ids.jobId ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId();
+    const canonicalUploadId = ids.uploadId ?? localStorage.getItem('trazzos_tracked_upload_id');
+    const canonicalCorrelationId = ids.correlationId ?? correlationId ?? localStorage.getItem('trazzos_tracked_correlation_id');
+
+    if (isInvalidTrackingId(canonicalUploadId)) {
+      setErrorConfirm('El ID de carga no es válido.');
+      setGlobalError('Error: El ID de carga (upload_id) no es válido o está vacío.');
+      return;
+    }
+    if (isInvalidTrackingId(canonicalJobId)) {
+      setErrorConfirm('El job_id no es válido.');
+      setGlobalError('Error: job_id no es válido o está vacío.');
+      return;
+    }
+    if (isInvalidTrackingId(canonicalCorrelationId)) {
+      setErrorConfirm('El correlation_id no es válido.');
+      setGlobalError('Error: correlation_id no es válido o está vacío.');
       return;
     }
 
-    console.log('[handleConfirm] IDs extraídos:', ids);
-    // Persistir explícitamente ANTES del envío a /upload-confirm
-    const canonicalJobId = ids.jobId || jobId || localStorage.getItem('trazzos_tracked_job_id') || createClientJobId();
-    persistTrackingIds({ jobId: canonicalJobId, uploadId: ids.uploadId });
+    const uploadIdStr = String(canonicalUploadId).trim();
+    const jobIdStr = String(canonicalJobId).trim();
+    const correlationIdStr = String(canonicalCorrelationId).trim();
+
+    persistTrackingIds({ jobId: jobIdStr, uploadId: uploadIdStr, correlationId: correlationIdStr });
+
+    console.log('[handleConfirm] IDs usados (desde sesión):', { jobId: jobIdStr, uploadId: uploadIdStr, correlationId: correlationIdStr });
 
     try {
       setLoadingConfirm(true);
@@ -766,22 +793,16 @@ export default function IngestionPage() {
       setSuccessConfirm(false);
 
       const payload = {
-        upload_id: ids.uploadId,
-        job_id: canonicalJobId,
+        upload_id: uploadIdStr,
+        job_id: jobIdStr,
+        correlation_id: correlationIdStr,
         cluster_id: FIXED_CLUSTER_ID,
         user_email: userEmail.trim() || 'user@example.com',
         app_url: appUrl.trim() || undefined,
       };
 
-      if (!payload.job_id) {
-        console.error('ERROR CRÍTICO: job_id undefined en body hacia webhook n8n');
-        const errorMsg = 'ERROR CRÍTICO: job_id undefined';
-        setErrorConfirm(errorMsg);
-        setGlobalError(errorMsg);
-        return;
-      }
-
-      console.log('[handleConfirm] Payload exacto enviado a /api/workflows/upload-confirm:', payload);
+      const payloadJson = JSON.stringify(payload);
+      console.log('[handleConfirm] JSON exacto que se enviará a /api/workflows/upload-confirm (y luego a n8n):', payloadJson);
 
       let dispatched = false;
 
@@ -814,11 +835,11 @@ export default function IngestionPage() {
             || responseTextLc.includes('session not found');
           if (missingSession) {
             console.warn('[handleConfirm] 500 por sesión faltante. Reintentando una vez con sesión local...');
-            const recoveredSession = {
-              upload_id: ids.uploadId,
-              job_id: canonicalJobId,
-            };
-            setSessionResponse(recoveredSession);
+            setSessionResponse({
+              upload_id: uploadIdStr,
+              job_id: jobIdStr,
+              correlation_id: correlationIdStr,
+            });
             response = await sendConfirm();
             text = await response.text().catch(() => '');
             console.log('[handleConfirm] Retry único ->', response.status, response.statusText);
@@ -855,11 +876,10 @@ export default function IngestionPage() {
 
         // Fallback de robustez: si 10s después de V2 el job sigue activo,
         // cerrarlo manualmente para evitar bloqueo de UI.
-        const fallbackJobId = ids.jobId || jobId;
-        if (fallbackJobId) {
+        if (jobIdStr) {
           if (autoCompleteTimeoutRef.current) clearTimeout(autoCompleteTimeoutRef.current);
           autoCompleteTimeoutRef.current = setTimeout(() => {
-            autoCompleteIfStuck(fallbackJobId);
+            autoCompleteIfStuck(jobIdStr);
           }, 10_000);
         }
       }
