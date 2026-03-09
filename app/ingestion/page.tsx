@@ -726,27 +726,38 @@ export default function IngestionPage() {
     }, 5_000);
   }, [handleRefreshMarts]);
 
-  // Step 3: Confirm — IDs desde sesión (ref o estado) para evitar pérdida por re-renders
-  const handleConfirm = async () => {
-    console.log('[handleConfirm] Iniciando confirmación...');
+  /**
+   * Confirmación de carga. Usar sessionSnapshot cuando se disponga del objeto de respuesta
+   * de la sesión (Workflow 1) para no depender de estado asíncrono (jobId/uploadId) en el click.
+   * @param sessionSnapshot Objeto de respuesta de upload-session (job_id, upload_id, correlation_id, signed_url). Si se pasa, se usa como única fuente de IDs.
+   */
+  const handleConfirm = async (sessionSnapshot?: SessionResponse | null) => {
+    console.log('[handleConfirm] Iniciando confirmación...', sessionSnapshot ? '(con snapshot de sesión)' : '(ref/estado)');
     setGlobalError(null);
 
-    let effectiveSession = sessionResponseRef.current ?? sessionResponse;
-    if (!effectiveSession) {
-      try {
-        const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
-        const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
-        const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
-        if (savedUploadId || savedJobId) {
-          effectiveSession = {
-            upload_id: savedUploadId || undefined,
-            job_id: savedJobId || undefined,
-            correlation_id: savedCorrelationId || undefined,
-          };
-          setSessionResponse(effectiveSession);
-          console.warn('[handleConfirm] Sesión reconstruida desde localStorage');
-        }
-      } catch { /* noop */ }
+    let effectiveSession: SessionResponse | null = null;
+
+    if (sessionSnapshot && typeof sessionSnapshot === 'object') {
+      effectiveSession = sessionSnapshot;
+      console.log('[handleConfirm] Usando sessionSnapshot (respuesta de Workflow 1) como fuente de IDs');
+    } else {
+      effectiveSession = sessionResponseRef.current ?? sessionResponse;
+      if (!effectiveSession) {
+        try {
+          const savedUploadId = localStorage.getItem('trazzos_tracked_upload_id');
+          const savedJobId = localStorage.getItem('trazzos_tracked_job_id');
+          const savedCorrelationId = localStorage.getItem('trazzos_tracked_correlation_id');
+          if (savedUploadId || savedJobId) {
+            effectiveSession = {
+              upload_id: savedUploadId || undefined,
+              job_id: savedJobId || undefined,
+              correlation_id: savedCorrelationId || undefined,
+            };
+            setSessionResponse(effectiveSession);
+            console.warn('[handleConfirm] Sesión reconstruida desde localStorage');
+          }
+        } catch { /* noop */ }
+      }
     }
 
     if (!effectiveSession) {
@@ -764,9 +775,9 @@ export default function IngestionPage() {
     }
 
     const ids = extractIds(effectiveSession);
-    const canonicalJobId = ids.jobId ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId();
-    const canonicalUploadId = ids.uploadId ?? localStorage.getItem('trazzos_tracked_upload_id');
-    const canonicalCorrelationId = ids.correlationId ?? correlationId ?? localStorage.getItem('trazzos_tracked_correlation_id');
+    const canonicalJobId = sessionSnapshot ? ids.jobId : (ids.jobId ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId());
+    const canonicalUploadId = sessionSnapshot ? ids.uploadId : (ids.uploadId ?? localStorage.getItem('trazzos_tracked_upload_id'));
+    const canonicalCorrelationId = sessionSnapshot ? ids.correlationId : (ids.correlationId ?? correlationId ?? localStorage.getItem('trazzos_tracked_correlation_id'));
 
     if (isInvalidTrackingId(canonicalUploadId)) {
       setErrorConfirm('El ID de carga no es válido.');

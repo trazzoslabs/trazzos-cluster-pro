@@ -5,12 +5,20 @@ const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
-const INVALID_ID_VALUES = new Set(['', 'undefined', 'null']);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function isInvalidId(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return INVALID_ID_VALUES.has(normalized) || normalized.length === 0;
+/**
+ * Validación estricta: el valor es inválido si es nulo, vacío, igual a "undefined"/"null"
+ * o contiene la palabra "undefined". Usado para job_id, correlation_id y upload_id.
+ */
+function isInvalidTrackingValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  const s = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (s.length === 0) return true;
+  const lower = s.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') return true;
+  if (lower.includes('undefined')) return true;
+  return false;
 }
 
 function isValidUUID(value: string): boolean {
@@ -37,24 +45,28 @@ export async function POST(request: NextRequest) {
     const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
     const uploadIdValue = typeof rawUploadId === 'string' ? rawUploadId.trim() : String(rawUploadId ?? '').trim();
 
-    // Validación estricta: rechazar antes de llamar a n8n
-    if (isInvalidId(jobId)) {
-      console.error('[upload-confirm] 400: job_id inválido o ausente', { received: rawJobId });
-      return createErrorResponse('job_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    // Validación estricta antes del fetch a n8n: nulo, vacío o contiene "undefined" → 400 detallado
+    const validationErrors: string[] = [];
+    if (isInvalidTrackingValue(jobId)) {
+      validationErrors.push('job_id es requerido y no puede ser nulo, vacío o contener la palabra "undefined"');
     }
-    if (isInvalidId(correlationIdValue)) {
-      console.error('[upload-confirm] 400: correlation_id inválido o ausente', { received: rawCorrelationId });
-      return createErrorResponse('correlation_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    if (isInvalidTrackingValue(correlationIdValue)) {
+      validationErrors.push('correlation_id es requerido y no puede ser nulo, vacío o contener la palabra "undefined"');
     }
-    if (isInvalidId(uploadIdValue)) {
-      console.error('[upload-confirm] 400: upload_id inválido o ausente', { received: rawUploadId });
-      return createErrorResponse('upload_id es requerido y no puede ser vacío ni la cadena "undefined"', 400);
+    if (isInvalidTrackingValue(uploadIdValue)) {
+      validationErrors.push('upload_id es requerido y no puede ser nulo, vacío o contener la palabra "undefined"');
+    }
+    if (validationErrors.length > 0) {
+      const detail = validationErrors.join('; ');
+      console.error('[upload-confirm] 400: validación fallida', { received: { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId }, errors: validationErrors });
+      return createErrorResponse(detail, 400);
     }
     if (!isValidUUID(uploadIdValue)) {
       console.error('[upload-confirm] 400: upload_id no es un UUID válido', { received: uploadIdValue });
       return createErrorResponse('upload_id debe ser un UUID válido', 400);
     }
 
+    // Payload a n8n con nombres exactos en snake_case (Workflow 2 espera upload_id, job_id, correlation_id)
     const finalPayload = {
       job_id: jobId,
       correlation_id: correlationIdValue,
