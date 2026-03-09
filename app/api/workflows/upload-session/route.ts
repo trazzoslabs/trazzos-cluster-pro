@@ -8,6 +8,31 @@ const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const SESSION_TIMEOUT_MS = 60_000;
 const ALLOWED_DATASET_TYPES = new Set(['shutdowns', 'needs', 'suppliers']);
 
+/** MIME types → tipo corto para n8n (V2-02-SW-Detect-File-Type). Siempre minúsculas. */
+const MIME_TO_N8N_FILE_TYPE: Record<string, string> = {
+  'text/csv': 'csv',
+  'application/json': 'json',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel': 'xlsx',
+};
+
+/**
+ * Devuelve el file_type que debe enviarse a n8n: tipo corto en minúsculas (csv, json, xlsx),
+ * no el MIME completo. Vital para el Switch V2-02-SW-Detect-File-Type.
+ */
+function fileTypeForN8n(mimeOrType: string, fileName: string): string {
+  const normalized = mimeOrType.trim().toLowerCase();
+  if (MIME_TO_N8N_FILE_TYPE[normalized]) return MIME_TO_N8N_FILE_TYPE[normalized];
+  if (normalized.includes('csv')) return 'csv';
+  if (normalized.includes('json')) return 'json';
+  if (normalized.includes('spreadsheet') || normalized.includes('excel') || normalized.includes('xlsx')) return 'xlsx';
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  if (ext === 'csv') return 'csv';
+  if (ext === 'json' || ext === 'jsonl') return 'json';
+  if (ext === 'xlsx') return 'xlsx';
+  return normalized || 'application/octet-stream';
+}
+
 const safeLog = (...args: any[]) => {
   try { console.log(...args); } catch { /* no-op */ }
 };
@@ -50,11 +75,14 @@ export async function POST(request: NextRequest) {
     const generatedJobId = crypto.randomUUID();
     const generatedCorrelationId = crypto.randomUUID();
 
+    const fileTypeForN8nValue = fileTypeForN8n(fileType, fileName);
+    safeLog('[upload-session] file_type para n8n (V2-02-SW-Detect-File-Type):', fileTypeForN8nValue, '(original:', fileType + ')');
+
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
     const payload = {
       company_id: companyId,
       file_name: fileName,
-      file_type: fileType,
+      file_type: fileTypeForN8nValue,
       user_id: userId,
       dataset_type: datasetType,
       job_id: generatedJobId,
