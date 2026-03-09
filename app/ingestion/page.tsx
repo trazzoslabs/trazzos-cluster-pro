@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import { supabaseClient } from '@/lib/supabaseClient';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -198,6 +199,7 @@ export default function IngestionPage() {
   const [forcingComplete, setForcingComplete] = useState<string | null>(null);
   const prevJobStatusRef = useRef<Map<string, string | null>>(new Map());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const realtimeChannelRef = useRef<ReturnType<typeof supabaseClient.channel> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
@@ -316,6 +318,21 @@ export default function IngestionPage() {
     }
   }, []);
 
+  const runJobCompletedLogic = useCallback((jobId: string) => {
+    setCompletionToast(`Job ${jobId.substring(0, 8)}… completado`);
+    handleRefreshMarts();
+    clearTrackingIds();
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (autoCompleteTimeoutRef.current) {
+      clearTimeout(autoCompleteTimeoutRef.current);
+      autoCompleteTimeoutRef.current = null;
+    }
+    setTimeout(() => setCompletionToast(null), 8000);
+  }, [handleRefreshMarts]);
+
   const startJobPolling = useCallback(() => {
     if (pollingRef.current) return;
 
@@ -331,14 +348,7 @@ export default function IngestionPage() {
           const curr = job.status?.toLowerCase();
           const wasRunning = prev && ['running', 'processing', 'pending', 'uploading', 'updating'].includes(prev.toLowerCase());
           if (wasRunning && curr === 'completed') {
-            setCompletionToast(`Job ${job.job_id.substring(0, 8)}… completado`);
-            handleRefreshMarts();
-            clearTrackingIds();
-            if (autoCompleteTimeoutRef.current) {
-              clearTimeout(autoCompleteTimeoutRef.current);
-              autoCompleteTimeoutRef.current = null;
-            }
-            setTimeout(() => setCompletionToast(null), 8000);
+            runJobCompletedLogic(job.job_id);
           }
         });
 
@@ -358,7 +368,43 @@ export default function IngestionPage() {
         // Silenciar errores de polling
       }
     }, 10_000);
-  }, [handleRefreshMarts]);
+  }, [runJobCompletedLogic]);
+
+  // Suscripción Realtime a ingestion_jobs (reemplaza polling para el job seguido)
+  useEffect(() => {
+    const trackedId = jobId ?? (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null);
+    if (!trackedId) return;
+
+    const channel = supabaseClient
+      .channel(`ingestion_job:${trackedId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'ingestion_jobs',
+          filter: `job_id=eq.${trackedId}`,
+        },
+        (payload) => {
+          const newRow = payload.new as { job_id?: string; status?: string };
+          const status = newRow?.status?.toLowerCase();
+          if (status === 'completed') {
+            runJobCompletedLogic(newRow.job_id ?? trackedId);
+            fetchRecentJobs();
+            realtimeChannelRef.current?.unsubscribe();
+            realtimeChannelRef.current = null;
+          }
+        }
+      )
+      .subscribe();
+
+    realtimeChannelRef.current = channel;
+
+    return () => {
+      channel.unsubscribe();
+      realtimeChannelRef.current = null;
+    };
+  }, [jobId, runJobCompletedLogic]);
 
   const handleForceComplete = useCallback(async (forceJobId: string) => {
     try {

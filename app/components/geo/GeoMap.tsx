@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
+import { companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
 import CompanyMarker from './CompanyMarker';
 
 // Importar Mapbox solo en el cliente para evitar problemas de SSR
@@ -25,9 +27,9 @@ interface GeoMapProps {
   is3DMode?: boolean;
   showConnections: boolean;
   synergies?: Array<{
-    companies_involved_json: any;
+    companies_involved_json: CompaniesInvolvedJson;
     status: string | null;
-    volume_total_json: any;
+    volume_total_json: VolumeTotalJsonValue;
   }>;
 }
 
@@ -163,8 +165,9 @@ export default function GeoMap({
 
         // Encontrar coordenadas de las empresas involucradas
         const coords: [number, number][] = [];
-        companiesInvolved.forEach((companyName: string) => {
-          const company = companies.find(c => 
+        companiesInvolved.forEach((entry) => {
+          const companyName = companyEntryName(entry);
+          const company = companies.find(c =>
             c.name.toLowerCase().includes(companyName.toLowerCase()) ||
             companyName.toLowerCase().includes(c.name.toLowerCase())
           );
@@ -174,7 +177,7 @@ export default function GeoMap({
         });
 
         if (coords.length >= 2) {
-          const volume = synergy.volume_total_json?.total || synergy.volume_total_json?.total_units || 0;
+          const volume = extractVolumeTotal(synergy.volume_total_json);
           const width = Math.max(1, Math.min(5, 1 + (volume / 1000000)));
 
           features.push({

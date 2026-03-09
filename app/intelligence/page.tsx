@@ -39,14 +39,17 @@ const GeoMap = dynamic(() => import('../components/geo/GeoMap'), {
   ),
 });
 
+import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
+import { companyEntryId, companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
+
 interface Synergy {
   synergy_id: string;
   cluster_id: string | null;
   item_category: string;
   window_start: string;
   window_end: string;
-  companies_involved_json: any;
-  volume_total_json: any;
+  companies_involved_json: CompaniesInvolvedJson;
+  volume_total_json: VolumeTotalJsonValue;
   status: string | null;
   created_at: string | null;
 }
@@ -99,23 +102,6 @@ interface AuditEvent {
 
 type ViewMode = '3d' | 'network' | 'analytics' | 'timeline' | 'geospatial';
 
-/** Extract a human-readable name from a companies_involved_json entry */
-function companyEntryName(entry: any): string {
-  if (typeof entry === 'string') return entry;
-  if (typeof entry === 'object' && entry !== null) {
-    return entry.name ?? entry.company_name ?? entry.company_id ?? '';
-  }
-  return String(entry ?? '');
-}
-
-function companyEntryId(entry: any): string | null {
-  if (typeof entry === 'object' && entry !== null) {
-    const id = entry.company_id ?? entry.id ?? null;
-    return typeof id === 'string' && id ? id : null;
-  }
-  return null;
-}
-
 // Lista de empresas del cluster
 const COMPANIES = [
   'Reficar',
@@ -135,353 +121,6 @@ const COMPANY_COORDINATES: { [key: string]: { name: string; lat: number; lng: nu
   'Esenttia': { name: 'Esenttia', lat: 10.3084, lng: -75.5179 },
   'Cabot': { name: 'Cabot Colombiana', lat: 10.3049, lng: -75.5230 },
 };
-
-// Componente de Vista Geoespacial
-function GeospatialView({ 
-  synergies, 
-  purchaseOrders, 
-  totalSavings, 
-  activeSynergies,
-  onSwitchMode 
-}: { 
-  synergies: Synergy[]; 
-  purchaseOrders: PurchaseOrder[]; 
-  totalSavings: number;
-  activeSynergies: number;
-  onSwitchMode: (mode: ViewMode) => void;
-}) {
-  const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
-  const [showSynergyLines, setShowSynergyLines] = useState(true);
-  const [mapState, setMapState] = useState({ center: { lat: 10.33, lng: -75.50 }, zoom: 12 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const mapRef = useRef<HTMLDivElement>(null);
-
-  // Proyección de coordenadas a píxeles (Mercator simplificado)
-  const project = (lat: number, lng: number, width: number, height: number) => {
-    const centerLat = mapState.center.lat;
-    const centerLng = mapState.center.lng;
-    const scale = Math.pow(2, mapState.zoom - 10) * 1000;
-    
-    const x = width / 2 + (lng - centerLng) * scale;
-    const y = height / 2 - (lat - centerLat) * scale;
-    
-    return { x, y };
-  };
-
-  // Handlers para zoom y pan
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -1 : 1;
-    setMapState(prev => ({
-      ...prev,
-      zoom: Math.max(10, Math.min(15, prev.zoom + delta * 0.5))
-    }));
-  };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    setIsDragging(true);
-    setDragStart({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    const dx = (e.clientX - dragStart.x) / Math.pow(2, mapState.zoom - 10) / 1000;
-    const dy = (e.clientY - dragStart.y) / Math.pow(2, mapState.zoom - 10) / 1000;
-    
-    setMapState(prev => ({
-      ...prev,
-      center: {
-        lat: prev.center.lat + dy,
-        lng: prev.center.lng - dx
-      }
-    }));
-    setDragStart({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  // Obtener sinergias entre empresas
-  const getSynergyConnections = () => {
-    const connections: Array<{ from: string; to: string; status: string; impact: number }> = [];
-    
-    synergies.forEach(synergy => {
-      try {
-        const rawCompanies = synergy.companies_involved_json;
-        if (Array.isArray(rawCompanies) && rawCompanies.length >= 2) {
-          const companies = rawCompanies.map(companyEntryName);
-          for (let i = 0; i < companies.length; i++) {
-            for (let j = i + 1; j < companies.length; j++) {
-              const from = companies[i];
-              const to = companies[j];
-              if (from && to && COMPANY_COORDINATES[from] && COMPANY_COORDINATES[to]) {
-                const volume = synergy.volume_total_json?.total || synergy.volume_total_json || 0;
-                connections.push({
-                  from,
-                  to,
-                  status: synergy.status || 'pending',
-                  impact: typeof volume === 'number' ? volume : 0,
-                });
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // Ignore parsing errors
-      }
-    });
-    
-    return connections;
-  };
-
-  const connections = getSynergyConnections();
-  const selectedCompanyData = selectedCompany ? COMPANY_COORDINATES[selectedCompany] : null;
-  const companySynergies = selectedCompany 
-    ? synergies.filter(s => {
-        try {
-          const raw = s.companies_involved_json;
-          if (!Array.isArray(raw)) return false;
-          return raw.some((e: any) => companyEntryName(e) === selectedCompany);
-        } catch {
-          return false;
-        }
-      })
-    : [];
-
-  return (
-    <div className="space-y-4">
-      {/* Métrica superior flotante */}
-      <div className="flex justify-center">
-        <div className="bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 min-w-[400px]">
-          <div className="text-center">
-            <p className="text-zinc-400 text-sm mb-2">Potencial de Ahorro Territorial</p>
-            <p className="text-3xl font-bold text-[#9aff8d] mb-3">
-              US$ {totalSavings.toLocaleString('es-CO')}
-            </p>
-            <div className="flex justify-center gap-6 text-sm">
-              <div>
-                <span className="text-zinc-400">Empresas activas: </span>
-                <span className="text-white font-semibold">{Object.keys(COMPANY_COORDINATES).length}</span>
-              </div>
-              <div>
-                <span className="text-zinc-400">Sinergias activas: </span>
-                <span className="text-white font-semibold">{activeSynergies}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Mapa */}
-      <SectionCard title="Vista Geoespacial" description="Distribución geográfica del cluster">
-        <div className="relative">
-          {/* Controles */}
-          <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button
-              onClick={() => setShowSynergyLines(!showSynergyLines)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                showSynergyLines
-                  ? 'bg-[#9aff8d]/10 text-[#9aff8d] border border-[#9aff8d]/30'
-                  : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-              }`}
-            >
-              {showSynergyLines ? 'Ocultar' : 'Mostrar'} Líneas
-            </button>
-            <div className="flex flex-col gap-1 bg-zinc-800/90 rounded-lg p-1 border border-zinc-700">
-              <button
-                onClick={() => setMapState(prev => ({ ...prev, zoom: Math.min(15, prev.zoom + 1) }))}
-                className="px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all"
-              >
-                +
-              </button>
-              <button
-                onClick={() => setMapState(prev => ({ ...prev, zoom: Math.max(10, prev.zoom - 1) }))}
-                className="px-2 py-1 rounded text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-700 transition-all"
-              >
-                −
-              </button>
-            </div>
-            <button
-              onClick={() => setMapState({ center: { lat: 10.33, lng: -75.50 }, zoom: 12 })}
-              className="px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700 hover:bg-zinc-700 transition-all"
-            >
-              Reset
-            </button>
-          </div>
-
-          {/* Mapa SVG */}
-          <div 
-            ref={mapRef}
-            className="h-[600px] bg-black/50 rounded-lg border border-zinc-800 relative overflow-hidden cursor-move"
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-          >
-            {/* Grid de fondo */}
-            <svg className="w-full h-full absolute inset-0" viewBox="0 0 800 600">
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(154, 255, 141, 0.05)" strokeWidth="1"/>
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-
-            {/* Mapa principal */}
-            <svg className="w-full h-full relative z-10" viewBox="0 0 800 600">
-              {/* Líneas de sinergia */}
-              {showSynergyLines && connections.map((conn, idx) => {
-                const fromCoords = COMPANY_COORDINATES[conn.from];
-                const toCoords = COMPANY_COORDINATES[conn.to];
-                if (!fromCoords || !toCoords) return null;
-                
-                const from = project(fromCoords.lat, fromCoords.lng, 800, 600);
-                const to = project(toCoords.lat, toCoords.lng, 800, 600);
-                
-                const color = conn.status === 'approved' ? '#9aff8d' : 
-                             conn.status === 'rfp' ? '#ffd700' : '#6b7280';
-                const width = Math.max(1, Math.min(4, 1 + (conn.impact / 1000000)));
-                
-                return (
-                  <line
-                    key={`line-${idx}`}
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                    stroke={color}
-                    strokeWidth={width}
-                    strokeOpacity={0.4}
-                    className="transition-opacity"
-                  />
-                );
-              })}
-
-              {/* Marcadores de empresas */}
-              {Object.entries(COMPANY_COORDINATES).map(([key, company]) => {
-                const coords = project(company.lat, company.lng, 800, 600);
-                const isSelected = selectedCompany === key;
-                const companySynergyCount = synergies.filter(s => {
-                  try {
-                    const raw = s.companies_involved_json;
-                    if (!Array.isArray(raw)) return false;
-                    return raw.some((e: any) => companyEntryName(e) === key);
-                  } catch {
-                    return false;
-                  }
-                }).length;
-
-                return (
-                  <g key={key} className="cursor-pointer">
-                    {/* Glow */}
-                    <circle
-                      cx={coords.x}
-                      cy={coords.y}
-                      r={isSelected ? 20 : 15}
-                      fill="#9aff8d"
-                      opacity={isSelected ? 0.3 : 0.2}
-                      className="transition-all"
-                    />
-                    {/* Marcador */}
-                    <circle
-                      cx={coords.x}
-                      cy={coords.y}
-                      r={isSelected ? 12 : 10}
-                      fill="#9aff8d"
-                      stroke="#000"
-                      strokeWidth={2}
-                      onClick={() => setSelectedCompany(isSelected ? null : key)}
-                      className="hover:opacity-80 transition-all"
-                      style={{ filter: 'drop-shadow(0 0 8px #9aff8d)' }}
-                    />
-                    {/* Label */}
-                    <text
-                      x={coords.x}
-                      y={coords.y - 20}
-                      textAnchor="middle"
-                      className="text-xs fill-zinc-300 font-medium pointer-events-none"
-                    >
-                      {key}
-                    </text>
-                    {/* Contador de sinergias */}
-                    {companySynergyCount > 0 && (
-                      <text
-                        x={coords.x}
-                        y={coords.y + 5}
-                        textAnchor="middle"
-                        className="text-[10px] fill-[#9aff8d] font-bold pointer-events-none"
-                      >
-                        {companySynergyCount}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Panel lateral flotante */}
-      {selectedCompanyData && (
-        <div className="fixed right-6 top-1/2 -translate-y-1/2 z-50 w-80 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 shadow-2xl">
-          <div className="flex items-start justify-between mb-4">
-            <h3 className="text-white font-bold text-lg">{selectedCompanyData.name}</h3>
-            <button
-              onClick={() => setSelectedCompany(null)}
-              className="text-zinc-400 hover:text-white transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <p className="text-zinc-400 text-xs mb-1">Tipo de compañía</p>
-              <p className="text-white text-sm font-medium">Industrial</p>
-            </div>
-
-            <div>
-              <p className="text-zinc-400 text-xs mb-1">Sinergias activas</p>
-              <p className="text-white text-sm font-semibold">{companySynergies.length}</p>
-            </div>
-
-            <div>
-              <p className="text-zinc-400 text-xs mb-1">Potencial de ahorro asociado</p>
-              <p className="text-[#9aff8d] text-sm font-bold">
-                US$ {companySynergies.reduce((sum, s) => {
-                  const volume = s.volume_total_json?.total || s.volume_total_json || 0;
-                  return sum + (typeof volume === 'number' ? volume * 0.1 : 0);
-                }, 0).toLocaleString('es-CO')}
-              </p>
-            </div>
-
-            <div className="pt-4 border-t border-zinc-800 flex gap-2">
-              <button
-                onClick={() => onSwitchMode('3d')}
-                className="flex-1 px-3 py-2 bg-[#9aff8d]/10 text-[#9aff8d] rounded-lg text-sm font-medium hover:bg-[#9aff8d]/20 transition-colors border border-[#9aff8d]/30"
-              >
-                Ver en 3D
-              </button>
-              <button
-                onClick={() => onSwitchMode('network')}
-                className="flex-1 px-3 py-2 bg-[#9aff8d]/10 text-[#9aff8d] rounded-lg text-sm font-medium hover:bg-[#9aff8d]/20 transition-colors border border-[#9aff8d]/30"
-              >
-                Ver Red
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function IntelligencePage() {
   const [activeMode, setActiveMode] = useState<ViewMode>('3d');
@@ -846,19 +485,8 @@ export default function IntelligencePage() {
     };
   };
 
-  // ── Helpers para extraer volumen numérico de volume_total_json ──
-  const extractVolume = (v: any): number => {
-    if (!v) return 0;
-    if (typeof v === 'number') return v;
-    if (typeof v === 'object') {
-      const n = v.total ?? v.total_units ?? v.quantity ?? v.amount ?? 0;
-      return typeof n === 'number' ? n : Number(n) || 0;
-    }
-    return Number(v) || 0;
-  };
-
-  // Calcular métricas basadas en volume_total_json de synergies
-  const totalVolume = synergies.reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
+  // Calcular métricas basadas en volume_total_json de synergies (tipado en lib/types/synergies)
+  const totalVolume = synergies.reduce((sum, s) => sum + extractVolumeTotal(s.volume_total_json), 0);
   const totalSavings = totalVolume > 0
     ? Math.round(totalVolume * 0.12) // estimación conservadora 12 % consolidación
     : purchaseOrders.reduce((sum, po) => sum + (po.total_amount || 0), 0);
@@ -927,11 +555,11 @@ export default function IntelligencePage() {
     .map((category) => {
       const clusterDemand = synergies
         .filter((s) => s.item_category === category)
-        .reduce((sum, s) => sum + extractVolume(s.volume_total_json), 0);
+        .reduce((sum, s) => sum + extractVolumeTotal(s.volume_total_json), 0);
       const avgSavingPct =
         synergies
           .filter((s) => s.item_category === category)
-          .reduce((sum, s) => sum + Number(s.volume_total_json?.estimated_savings_pct || 12), 0) /
+          .reduce((sum, s) => sum + Number((typeof s.volume_total_json === 'object' && s.volume_total_json?.estimated_savings_pct) ?? 12), 0) /
           Math.max(1, synergies.filter((s) => s.item_category === category).length);
 
       const individualDemand = Math.round(clusterDemand * (1 - avgSavingPct / 100));
@@ -976,7 +604,7 @@ export default function IntelligencePage() {
 
     entries.forEach((entry: any) => {
       const existing = nodeMap.get(entry.key);
-      const currentVolume = extractVolume(synergy.volume_total_json);
+      const currentVolume = extractVolumeTotal(synergy.volume_total_json);
       if (existing) {
         existing.synergyCount += 1;
         existing.totalVolume += currentVolume;
@@ -1001,7 +629,7 @@ export default function IntelligencePage() {
           sceneLinks.push({
             sourceKey,
             targetKey,
-            intensity: Math.max(0.8, Math.min(2.5, extractVolume(synergy.volume_total_json) / 8000)),
+            intensity: Math.max(0.8, Math.min(2.5, extractVolumeTotal(synergy.volume_total_json) / 8000)),
           });
         }
       }
@@ -1027,10 +655,15 @@ export default function IntelligencePage() {
           : (need.company_id || '').toLowerCase().includes(selectedNode.name.toLowerCase())
       )
     : [];
-  const selectedNodeSavings = selectedNodeSynergies.reduce(
-    (sum, synergy) => sum + extractVolume(synergy.volume_total_json) * ((synergy.volume_total_json?.estimated_savings_pct || 12) / 100),
-    0
-  );
+  const selectedNodeSavings = selectedNodeSynergies.reduce((sum, synergy) => {
+    const pct =
+      typeof synergy.volume_total_json === 'object' &&
+      synergy.volume_total_json != null &&
+      typeof (synergy.volume_total_json as { estimated_savings_pct?: number }).estimated_savings_pct === 'number'
+        ? (synergy.volume_total_json as { estimated_savings_pct: number }).estimated_savings_pct
+        : 12;
+    return sum + extractVolumeTotal(synergy.volume_total_json) * (pct / 100);
+  }, 0);
   const selectedNodeCategories = Array.from(
     new Set(selectedNodeNeeds.map((need) => need.item_category).filter((category): category is string => Boolean(category)))
   );

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import PageTitle from '../../../components/ui/PageTitle';
@@ -66,6 +66,7 @@ export default function IngestionJobPage() {
   const [applyingMapping, setApplyingMapping] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [mappingSuccess, setMappingSuccess] = useState(false);
+  const autoMatchAppliedRef = useRef(false);
 
   // Fetch job data
   const fetchJob = async () => {
@@ -266,6 +267,106 @@ export default function IngestionJobPage() {
 
   const targetFields = getTargetFields(datasetType);
   const requiredFields = getRequiredFields(datasetType);
+
+  /**
+   * Sugiere campo destino a partir del nombre de la columna origen (auto-match).
+   * Basado en docs01_DB_SCHEMA.md (needs, shutdowns, suppliers).
+   */
+  const suggestTargetField = (sourceColumn: string, type: string | null): string => {
+    const normalized = sourceColumn.trim().toLowerCase().replace(/\s+/g, '_');
+    const typeLower = (type ?? '').toLowerCase();
+
+    const needsMap: Record<string, string> = {
+      company_id: 'company_id',
+      company: 'company_id',
+      empresa: 'company_id',
+      site_id: 'site_id',
+      site: 'site_id',
+      sede: 'site_id',
+      shutdown_id: 'shutdown_id',
+      parada: 'shutdown_id',
+      item_name: 'item_name',
+      item: 'item_name',
+      nombre: 'item_name',
+      descripcion: 'item_name',
+      item_category: 'item_category',
+      category: 'item_category',
+      categoria: 'item_category',
+      specs: 'specs',
+      especificaciones: 'specs',
+      quantity: 'quantity',
+      cant: 'quantity',
+      cantidad: 'quantity',
+      qty: 'quantity',
+      uom: 'uom',
+      unit: 'uom',
+      unidad: 'uom',
+      required_by_date: 'required_by_date',
+      fecha_requerida: 'required_by_date',
+      lead_time_days: 'lead_time_days',
+      dias_entrega: 'lead_time_days',
+    };
+
+    const shutdownsMap: Record<string, string> = {
+      company_id: 'company_id',
+      company: 'company_id',
+      site_id: 'site_id',
+      site: 'site_id',
+      asset_area: 'asset_area',
+      area: 'asset_area',
+      start_date: 'start_date',
+      inicio: 'start_date',
+      end_date: 'end_date',
+      fin: 'end_date',
+      criticality: 'criticality',
+      criticidad: 'criticality',
+    };
+
+    const suppliersMap: Record<string, string> = {
+      supplier_name: 'supplier_name',
+      supplier: 'supplier_name',
+      proveedor: 'supplier_name',
+      country: 'country',
+      pais: 'country',
+      is_national: 'is_national',
+      nacional: 'is_national',
+      verification_status: 'verification_status',
+      quality_score: 'quality_score',
+      sla_score: 'sla_score',
+    };
+
+    const map = typeLower === 'shutdowns' ? shutdownsMap : typeLower === 'suppliers' ? suppliersMap : needsMap;
+    const allowed = new Set(getTargetFields(type));
+
+    if (map[normalized] && allowed.has(map[normalized])) return map[normalized];
+
+    for (const [key, target] of Object.entries(map)) {
+      if (allowed.has(target) && (normalized.includes(key) || key.includes(normalized))) return target;
+    }
+    return '';
+  };
+
+  const handleAutoMatch = () => {
+    const suggested: ColumnMapping = {};
+    stagingColumns.forEach((col) => {
+      const target = suggestTargetField(col.source_column, datasetType);
+      if (target) suggested[col.source_column] = target;
+    });
+    setColumnMapping((prev) => ({ ...suggested, ...prev }));
+    setMappingError(null);
+  };
+
+  // Auto-match al cargar columnas (sugerencias iniciales, una sola vez)
+  useEffect(() => {
+    if (autoMatchAppliedRef.current || stagingColumns.length === 0 || !datasetType) return;
+    autoMatchAppliedRef.current = true;
+    const suggested: ColumnMapping = {};
+    stagingColumns.forEach((col) => {
+      const target = suggestTargetField(col.source_column, datasetType);
+      if (target) suggested[col.source_column] = target;
+    });
+    if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
+  }, [stagingColumns, datasetType]);
 
   // Validate mapping
   const validateMapping = (): { valid: boolean; missingFields: string[] } => {
@@ -549,7 +650,14 @@ export default function IngestionJobPage() {
                 </table>
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleAutoMatch}
+                  className="px-5 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-md transition-colors font-medium"
+                >
+                  Auto-asignar sugerencias
+                </button>
                 <button
                   onClick={handleValidateMapping}
                   disabled={validatingMapping || Object.keys(columnMapping).length === 0}
