@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
-import { getIngestionJobs, updateIngestionJobStatus } from '@/lib/services/ingestion-jobs';
+import { getIngestionJobs, getIngestionJobByJobIdOrUploadId, updateIngestionJobStatus } from '@/lib/services/ingestion-jobs';
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -32,6 +32,13 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const jobId = searchParams.get('job_id');
+    const id = searchParams.get('id');
+
+    if (id) {
+      const job = await getIngestionJobByJobIdOrUploadId(id);
+      if (!job) return createErrorResponse('Job no encontrado', 404);
+      return createSuccessResponse(job);
+    }
 
     const data = await getIngestionJobs(jobId);
 
