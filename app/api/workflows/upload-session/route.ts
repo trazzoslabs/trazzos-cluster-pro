@@ -80,13 +80,20 @@ export async function POST(request: NextRequest) {
 
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
     const payload = {
+      // Campos originales de compatibilidad
       company_id: companyId,
-      file_name: fileName,
-      file_type: fileTypeForN8nValue,
       user_id: userId,
       dataset_type: datasetType,
       job_id: generatedJobId,
       correlation_id: generatedCorrelationId,
+
+      // Campos redundantes para inserción directa en Supabase (Auto-map de n8n)
+      uploader_user_id: userId,
+      file_name: fileName,
+      fileName: fileName, // redundancia camelCase
+      file_type: fileTypeForN8nValue,
+      fileType: fileTypeForN8nValue, // redundancia camelCase
+      declared_dataset_type: datasetType,
     };
 
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
