@@ -939,7 +939,6 @@ export default function IngestionPage() {
         cluster_id: FIXED_CLUSTER_ID,
         user_email: effectiveEmail,
         app_url: effectiveAppUrl || undefined,
-        ...(sampleDataRef.current?.length && { sample_data: sampleDataRef.current }),
         data: dataRows,
       };
 
@@ -1155,10 +1154,9 @@ export default function IngestionPage() {
         dataset_type: datasetType,
         user_email: confirmEmail,
         app_url: confirmAppUrl || undefined,
-        ...(sample_data && sample_data.length > 0 && { sample_data }),
         data: fullRows,
       };
-      console.log('[handleUpload] JSON enviado a upload-confirm (filas en data):', fullRows.length);
+      console.log('[handleUpload] JSON enviado a upload-confirm (data = filas, no sample_data):', fullRows.length);
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
