@@ -176,6 +176,51 @@ export default function IngestionPage() {
     return null;
   };
 
+  /**
+   * Extrae todas las filas del archivo (JSON, JSONL o CSV) para enviar como data a upload-confirm.
+   * Usado para que n8n reciba las filas a procesar (no solo sample_data).
+   */
+  const extractAllRowsFromFile = async (inputFile: File): Promise<Record<string, unknown>[]> => {
+    const ext = inputFile.name.split('.').pop()?.toLowerCase();
+    try {
+      const text = await inputFile.text();
+      if (ext === 'csv') {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length < 2) return [];
+        const delimiter = lines[0].includes(';') ? ';' : ',';
+        const headers = lines[0].split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
+        const rows: Record<string, unknown>[] = [];
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(delimiter);
+          const obj: Record<string, unknown> = {};
+          headers.forEach((h, j) => { obj[h] = values[j]?.trim().replace(/^"|"$/g, '') ?? ''; });
+          rows.push(obj);
+        }
+        return rows;
+      }
+      if (ext === 'jsonl') {
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        const out: Record<string, unknown>[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          try {
+            const parsed = JSON.parse(lines[i]) as Record<string, unknown>;
+            if (parsed && typeof parsed === 'object') out.push(parsed);
+          } catch { /* skip invalid line */ }
+        }
+        return out;
+      }
+      if (ext === 'json') {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed.filter((x) => x && typeof x === 'object') as Record<string, unknown>[];
+        if (parsed && typeof parsed === 'object') return [parsed as Record<string, unknown>];
+        return [];
+      }
+    } catch (e) {
+      console.warn('[extractAllRowsFromFile] Error leyendo archivo:', e);
+    }
+    return [];
+  };
+
   const csvEscape = (value: unknown): string => {
     const str = String(value ?? '');
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
@@ -257,6 +302,7 @@ export default function IngestionPage() {
   const sessionResponseRef = useRef<SessionResponse | null>(null);
   const jobIdRef = useRef<string | null>(null);
   const sampleDataRef = useRef<Record<string, unknown>[] | null>(null);
+  const fileRowsRef = useRef<Record<string, unknown>[] | null>(null);
 
   // Persistir / restaurar IDs de tracking en localStorage
   const persistTrackingIds = (ids: { jobId?: string | null; uploadId?: string | null; correlationId?: string | null }) => {
@@ -882,6 +928,7 @@ export default function IngestionPage() {
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
         ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
+      const dataRows = fileRowsRef.current ?? [];
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,
@@ -891,6 +938,7 @@ export default function IngestionPage() {
         user_email: effectiveEmail,
         app_url: effectiveAppUrl || undefined,
         ...(sampleDataRef.current?.length && { sample_data: sampleDataRef.current }),
+        data: dataRows,
       };
 
       const payloadJson = JSON.stringify(payload);
@@ -1006,11 +1054,16 @@ export default function IngestionPage() {
         throw new Error(`Tipo de archivo no soportado. Use: ${validExtensions.join(', ')}`);
       }
 
-      // Captura de sample_data: primeras 3 filas (JSON/CSV/JSONL) para Workflow 3 (sugerencias de mapeo)
+      // Captura de sample_data (primeras 3 filas) y de todas las filas para data (upload-confirm / n8n)
       const sample_data = await extractSampleDataFromFile(file);
       sampleDataRef.current = sample_data;
+      const fullRows = await extractAllRowsFromFile(file);
+      fileRowsRef.current = fullRows;
       if (sample_data?.length) {
         console.log('[handleUpload] sample_data extraído (filas):', sample_data.length);
+      }
+      if (fullRows.length) {
+        console.log('[handleUpload] filas totales para data:', fullRows.length);
       }
 
       // Fase 1 (Session): pedir signed_url + IDs al proxy
@@ -1100,8 +1153,9 @@ export default function IngestionPage() {
         user_email: confirmEmail,
         app_url: confirmAppUrl || undefined,
         ...(sample_data && sample_data.length > 0 && { sample_data }),
+        data: fullRows,
       };
-      console.log('[handleUpload] JSON enviado a upload-confirm:', JSON.stringify(confirmPayload));
+      console.log('[handleUpload] JSON enviado a upload-confirm (filas en data):', fullRows.length);
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

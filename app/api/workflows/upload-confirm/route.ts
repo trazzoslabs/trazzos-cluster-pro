@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
@@ -87,7 +88,27 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Dataset type missing', 400);
     }
 
-    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data, dataset_type en data)
+    // Filas a procesar: del body o recuperadas de la base por job_id
+    let dataRows: unknown[] = [];
+    const rawBodyData = body?.data;
+    if (Array.isArray(rawBodyData) && rawBodyData.length > 0) {
+      dataRows = rawBodyData;
+    } else {
+      const tableCandidates = ['stg_needs_rows', 'stg_shutdowns_rows'];
+      for (const tableName of tableCandidates) {
+        const { data: dbRows, error } = await supabaseServer
+          .from(tableName)
+          .select('raw_json, row_number, mapped_json, status')
+          .eq('job_id', jobId)
+          .order('row_number', { ascending: true });
+        if (!error && dbRows && dbRows.length > 0) {
+          dataRows = dbRows.map((r) => r.raw_json ?? r);
+          break;
+        }
+      }
+    }
+
+    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data, dataset_type, data/rows en data)
     const dataPayload: Record<string, unknown> = {
       job_id: jobId,
       upload_id: uploadIdValue,
@@ -95,6 +116,7 @@ export async function POST(request: NextRequest) {
       ...(user_email && { user_email }),
       ...(app_url && { app_url }),
       ...(sample_data != null && sample_data.length > 0 && { sample_data }),
+      data: dataRows,
     };
     const finalPayload = {
       job_id: jobId,
@@ -109,6 +131,12 @@ export async function POST(request: NextRequest) {
       data: dataPayload,
     };
     const correlationId = finalPayload.correlation_id;
+
+    console.log('Cantidad de filas detectadas:', (dataPayload.data as unknown[])?.length ?? 0);
+    if (!Array.isArray(dataPayload.data) || dataPayload.data.length === 0) {
+      console.error('[upload-confirm] 400: no hay filas para procesar (ni en body ni en DB)', { job_id: jobId });
+      return createErrorResponse('No data found to process', 400);
+    }
 
     const baseConfirmUrl = N8N_CONFIRM_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
     const url = `${baseConfirmUrl}?job_id=${encodeURIComponent(jobId)}&correlation_id=${encodeURIComponent(correlationIdValue)}`;
