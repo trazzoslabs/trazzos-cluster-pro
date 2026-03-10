@@ -73,8 +73,10 @@ export async function POST(request: NextRequest) {
 
     const rawUserEmail = body?.user_email ?? body?.userEmail;
     const rawAppUrl = body?.app_url ?? body?.appUrl;
+    const rawCompanyId = body?.company_id ?? body?.companyId;
     const rawSampleData = body?.sample_data ?? body?.sampleData;
     const rawDatasetType = rawDatasetTypeFromBody ?? body?.datasetType;
+    const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : '';
     const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
     const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
     const dataset_type = typeof rawDatasetType === 'string' ? rawDatasetType.trim() : '';
@@ -109,23 +111,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const dataFromClient = dataRows;
     const effectiveAppUrl = app_url || 'https://trazzos-cluster-pro.vercel.app';
+    const eventId = jobId;
 
-    // Objeto plano a n8n: data es el array directo (no anidar). Asegurar que aquí vayan las filas.
+    // Objeto que recibe n8n: event_type upload_confirmed con data = array de filas (vital)
     const finalPayload = {
-      job_id: jobId,
-      dataset_type: dataset_type,
-      data: dataFromClient,
-      app_url: effectiveAppUrl,
+      event_id: eventId,
       correlation_id: correlationIdValue,
+      event_type: 'upload_confirmed',
+      company_id: companyId || undefined,
+      dataset_type: dataset_type,
+      data: dataRows,
+      app_url: effectiveAppUrl,
+      job_id: jobId,
       upload_id: uploadIdValue,
       ...(user_email && { user_email }),
       ...(sample_data != null && sample_data.length > 0 && { sample_data }),
     };
     const correlationId = correlationIdValue;
 
-    console.log('Cantidad de filas detectadas:', (finalPayload.data as unknown[])?.length ?? 0);
+    console.log('Cantidad de filas detectadas (data enviado a n8n):', (finalPayload.data as unknown[])?.length ?? 0);
     if (!Array.isArray(finalPayload.data) || finalPayload.data.length === 0) {
       console.error('[upload-confirm] 400: no hay filas para procesar (ni en body ni en DB)', { job_id: jobId });
       return createErrorResponse('No data found to process', 400);

@@ -930,11 +930,12 @@ export default function IngestionPage() {
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
         ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
-      const dataRows = (previewData?.length ? previewData : fileRowsRef.current) ?? [];
+      const dataRows = fileRowsRef.current ?? previewData ?? [];
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,
         correlation_id: correlationIdStr,
+        company_id: companyId,
         dataset_type: datasetType,
         cluster_id: FIXED_CLUSTER_ID,
         user_email: effectiveEmail,
@@ -1151,6 +1152,7 @@ export default function IngestionPage() {
         job_id: confirmJobId,
         correlation_id: confirmCorrelationId,
         upload_id: confirmUploadId,
+        company_id: companyId,
         dataset_type: datasetType,
         user_email: confirmEmail,
         app_url: confirmAppUrl || undefined,
