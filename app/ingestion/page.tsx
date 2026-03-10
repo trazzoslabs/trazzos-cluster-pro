@@ -930,7 +930,7 @@ export default function IngestionPage() {
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
         ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
-      const dataRows = previewData.length > 0 ? previewData : (fileRowsRef.current ?? []);
+      const dataRows = (previewData?.length ? previewData : fileRowsRef.current) ?? [];
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,

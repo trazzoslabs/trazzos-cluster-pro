@@ -109,32 +109,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Payload a n8n con nombres exactos en snake_case (Workflow 2 + Workflow 3: upload_id, job_id, correlation_id, user_email, app_url, sample_data, dataset_type, data/rows en data)
-    const dataPayload: Record<string, unknown> = {
-      job_id: jobId,
-      upload_id: uploadIdValue,
-      dataset_type,
-      ...(user_email && { user_email }),
-      ...(app_url && { app_url }),
-      ...(sample_data != null && sample_data.length > 0 && { sample_data }),
-      data: dataRows,
-    };
+    const dataFromClient = dataRows;
+    const effectiveAppUrl = app_url || 'https://trazzos-cluster-pro.vercel.app';
+
+    // Payload plano a n8n: datos directamente en la raíz (sin anidar data)
     const finalPayload = {
+      event_id: jobId,
       job_id: jobId,
+      dataset_type,
+      data: dataFromClient,
+      app_url: effectiveAppUrl,
       correlation_id: correlationIdValue,
       upload_id: uploadIdValue,
-      dataset_type,
       ...(user_email && { user_email }),
-      ...(app_url && { app_url }),
-      id: jobId,
-      external_id: jobId,
-      uuid: jobId,
-      data: dataPayload,
+      ...(sample_data != null && sample_data.length > 0 && { sample_data }),
     };
-    const correlationId = finalPayload.correlation_id;
+    const correlationId = correlationIdValue;
 
-    console.log('Cantidad de filas detectadas:', (dataPayload.data as unknown[])?.length ?? 0);
-    if (!Array.isArray(dataPayload.data) || dataPayload.data.length === 0) {
+    console.log('Cantidad de filas detectadas:', (finalPayload.data as unknown[])?.length ?? 0);
+    if (!Array.isArray(finalPayload.data) || finalPayload.data.length === 0) {
       console.error('[upload-confirm] 400: no hay filas para procesar (ni en body ni en DB)', { job_id: jobId });
       return createErrorResponse('No data found to process', 400);
     }
@@ -151,7 +144,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[upload-confirm] URL de confirmación:', url);
-    console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id);
+    console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s data.length=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id, (finalPayload.data as unknown[])?.length ?? 0);
     console.log('[V2-05-Check] Enviando JobID a n8n: %s', jobId);
     console.log('[Payload-Debug]', JSON.stringify(finalPayload, null, 2));
     const payloadJson = JSON.stringify(finalPayload);
