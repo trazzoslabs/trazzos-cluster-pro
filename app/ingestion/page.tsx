@@ -39,6 +39,7 @@ export default function IngestionPage() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
+  const [previewData, setPreviewData] = useState<Record<string, unknown>[]>([]);
   const [datasetType, setDatasetType] = useState<DatasetType>('needs');
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
 
@@ -707,6 +708,7 @@ export default function IngestionPage() {
       setCompletionToast('Procesamiento iniciado');
       setTimeout(() => setCompletionToast(null), 5000);
       setFile(null);
+      setPreviewData([]);
       if (ids.uploadId) {
         console.log('[handleCreateSession] Upload ID extraído (para V2-02-DB-Get-Upload-Metadata):', ids.uploadId);
       }
@@ -928,7 +930,7 @@ export default function IngestionPage() {
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
         ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
-      const dataRows = fileRowsRef.current ?? [];
+      const dataRows = previewData.length > 0 ? previewData : (fileRowsRef.current ?? []);
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,
@@ -1059,6 +1061,7 @@ export default function IngestionPage() {
       sampleDataRef.current = sample_data;
       const fullRows = await extractAllRowsFromFile(file);
       fileRowsRef.current = fullRows;
+      setPreviewData(fullRows);
       if (sample_data?.length) {
         console.log('[handleUpload] sample_data extraído (filas):', sample_data.length);
       }
@@ -1175,6 +1178,7 @@ export default function IngestionPage() {
       });
       setSuccessSession(true);
       setFile(null);
+      setPreviewData([]);
       persistTrackingIds({ jobId: confirmJobId, uploadId: confirmUploadId, correlationId: confirmCorrelationId });
       fetchRecentJobs();
     } catch (err) {
@@ -1236,7 +1240,7 @@ export default function IngestionPage() {
             <input
               type="file"
               accept=".csv,.json,.jsonl,.xlsx"
-              onChange={(e) => {
+              onChange={async (e) => {
                 const selectedFile = e.target.files?.[0] || null;
                 setFile(selectedFile);
                 if (selectedFile) {
@@ -1245,6 +1249,20 @@ export default function IngestionPage() {
                     size: selectedFile.size,
                     type: selectedFile.type,
                   });
+                  try {
+                    const sample = await extractSampleDataFromFile(selectedFile);
+                    sampleDataRef.current = sample;
+                    const rows = await extractAllRowsFromFile(selectedFile);
+                    fileRowsRef.current = rows;
+                    setPreviewData(rows);
+                  } catch (err) {
+                    console.warn('[File Input] Error extrayendo filas para preview:', err);
+                    setPreviewData([]);
+                    fileRowsRef.current = null;
+                  }
+                } else {
+                  setPreviewData([]);
+                  fileRowsRef.current = null;
                 }
               }}
               className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"

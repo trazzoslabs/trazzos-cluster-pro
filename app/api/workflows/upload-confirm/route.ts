@@ -39,12 +39,11 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const rawJobId = body?.job_id;
-    const rawCorrelationId = body?.correlation_id;
-    const rawUploadId = body?.upload_id ?? body?.uploadId;
+    const { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId, dataset_type: rawDatasetTypeFromBody, data: dataFromBody } = (body ?? {}) as Record<string, unknown>;
+    const rawUploadIdResolved = rawUploadId ?? (body?.uploadId as string | undefined);
     const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : String(rawJobId ?? '').trim();
     const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
-    const uploadIdValue = typeof rawUploadId === 'string' ? rawUploadId.trim() : String(rawUploadId ?? '').trim();
+    const uploadIdValue = typeof rawUploadIdResolved === 'string' ? rawUploadIdResolved.trim() : String(rawUploadIdResolved ?? rawUploadId ?? '').trim();
 
     // Validación estricta antes del fetch a n8n: nulo, vacío o contiene "undefined" → 400 detallado
     const validationErrors: string[] = [];
@@ -75,7 +74,7 @@ export async function POST(request: NextRequest) {
     const rawUserEmail = body?.user_email ?? body?.userEmail;
     const rawAppUrl = body?.app_url ?? body?.appUrl;
     const rawSampleData = body?.sample_data ?? body?.sampleData;
-    const rawDatasetType = body?.dataset_type ?? body?.datasetType;
+    const rawDatasetType = rawDatasetTypeFromBody ?? body?.datasetType;
     const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
     const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
     const dataset_type = typeof rawDatasetType === 'string' ? rawDatasetType.trim() : '';
@@ -88,11 +87,13 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Dataset type missing', 400);
     }
 
-    // Filas a procesar: del body o recuperadas de la base por job_id
+    const bodyData = Array.isArray(dataFromBody) ? dataFromBody : undefined;
+    console.log('Filas recibidas en API:', bodyData?.length);
+
+    // Filas a procesar: del body (data) o recuperadas de la base por job_id
     let dataRows: unknown[] = [];
-    const rawBodyData = body?.data;
-    if (Array.isArray(rawBodyData) && rawBodyData.length > 0) {
-      dataRows = rawBodyData;
+    if (bodyData && bodyData.length > 0) {
+      dataRows = bodyData;
     } else {
       const tableCandidates = ['stg_needs_rows', 'stg_shutdowns_rows'];
       for (const tableName of tableCandidates) {
