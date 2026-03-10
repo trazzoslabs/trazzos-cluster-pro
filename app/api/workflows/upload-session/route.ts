@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
 
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
     const payload = {
-      // 1. Formato snake_case (Oficial de la documentación)
+      // 1. Esquema original (Documentación)
       company_id: companyId,
       user_id: userId,
       file_name: fileName,
@@ -89,18 +89,21 @@ export async function POST(request: NextRequest) {
       job_id: generatedJobId,
       correlation_id: generatedCorrelationId,
 
-      // 2. Formato camelCase (Posible mapeo interno en n8n)
+      // 2. Redundancia de Base de datos y camelCase
       companyId: companyId,
       userId: userId,
       fileName: fileName,
       fileType: fileTypeForN8nValue,
       datasetType: datasetType,
-      jobId: generatedJobId,
-      correlationId: generatedCorrelationId,
-
-      // 3. Formato directo a base de datos (Supabase auto-map)
       uploader_user_id: userId,
       declared_dataset_type: datasetType,
+
+      // 3. ESQUEMA DE EVENTOS DE N8N (La clave para pasar el filtro)
+      actor_user_id: userId,
+      summary: fileName,
+      content_type: fileTypeForN8nValue,
+      mime_type: fileTypeForN8nValue,
+      entity_type: 'upload',
     };
 
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
