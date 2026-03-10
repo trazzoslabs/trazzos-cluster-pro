@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
-import { supabaseServer } from '../../_lib/supabaseServer';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
@@ -39,7 +38,7 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId, dataset_type: rawDatasetTypeFromBody, data: dataFromBody } = (body ?? {}) as Record<string, unknown>;
+    const { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId, dataset_type: rawDatasetTypeFromBody } = (body ?? {}) as Record<string, unknown>;
     const rawUploadIdResolved = rawUploadId ?? (body?.uploadId as string | undefined);
     const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : String(rawJobId ?? '').trim();
     const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
@@ -74,67 +73,33 @@ export async function POST(request: NextRequest) {
     const rawUserEmail = body?.user_email ?? body?.userEmail;
     const rawAppUrl = body?.app_url ?? body?.appUrl;
     const rawCompanyId = body?.company_id ?? body?.companyId;
-    const rawSampleData = body?.sample_data ?? body?.sampleData;
+    const rawUserId = body?.user_id ?? body?.userId;
     const rawDatasetType = rawDatasetTypeFromBody ?? body?.datasetType;
     const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : '';
     const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
     const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
     const dataset_type = typeof rawDatasetType === 'string' ? rawDatasetType.trim() : '';
-    const sample_data = Array.isArray(rawSampleData)
-      ? rawSampleData.slice(0, 10)
-      : undefined;
 
     if (isInvalidTrackingValue(dataset_type)) {
       console.error('[upload-confirm] 400: dataset_type vacío', { received: rawDatasetType });
       return createErrorResponse('Dataset type missing', 400);
     }
 
-    const bodyData = Array.isArray(dataFromBody) ? dataFromBody : undefined;
-    console.log('Filas recibidas en API:', bodyData?.length);
-
-    // Filas a procesar: del body (data) o recuperadas de la base por job_id
-    let dataRows: unknown[] = [];
-    if (bodyData && bodyData.length > 0) {
-      dataRows = bodyData;
-    } else {
-      const tableCandidates = ['stg_needs_rows', 'stg_shutdowns_rows'];
-      for (const tableName of tableCandidates) {
-        const { data: dbRows, error } = await supabaseServer
-          .from(tableName)
-          .select('raw_json, row_number, mapped_json, status')
-          .eq('job_id', jobId)
-          .order('row_number', { ascending: true });
-        if (!error && dbRows && dbRows.length > 0) {
-          dataRows = dbRows.map((r) => r.raw_json ?? r);
-          break;
-        }
-      }
-    }
-
     const effectiveAppUrl = app_url || 'https://trazzos-cluster-pro.vercel.app';
-    const eventId = jobId;
+    const userId = typeof rawUserId === 'string' ? rawUserId.trim() : 'bff82884-0263-4bc1-8895-3567c2c02b55';
 
-    // Objeto que recibe n8n: event_type upload_confirmed con data = array de filas (vital)
+    // Solo metadatos: n8n descarga el archivo desde Supabase Storage
     const finalPayload = {
-      event_id: eventId,
-      correlation_id: correlationIdValue,
-      event_type: 'upload_confirmed',
-      company_id: companyId || undefined,
-      dataset_type: dataset_type,
-      data: dataRows,
-      app_url: effectiveAppUrl,
-      job_id: jobId,
       upload_id: uploadIdValue,
-      ...(user_email && { user_email }),
-      ...(sample_data != null && sample_data.length > 0 && { sample_data }),
+      user_id: userId || 'bff82884-0263-4bc1-8895-3567c2c02b55',
+      company_id: companyId || 'aaaa1111-1111-4111-a111-111111111111',
+      dataset_type: dataset_type,
+      user_email: user_email,
+      app_url: effectiveAppUrl,
+      correlation_id: correlationIdValue,
+      job_id: jobId,
     };
     const correlationId = correlationIdValue;
-
-    console.log('Cantidad de filas detectadas (data enviado a n8n):', (finalPayload.data as unknown[])?.length ?? 0);
-    if (!Array.isArray(finalPayload.data) || finalPayload.data.length === 0) {
-      console.error('[upload-confirm] 400: no hay filas para procesar (ni en body ni en DB)', { job_id: jobId });
-      return createErrorResponse('No data found to process', 400);
-    }
 
     const baseConfirmUrl = N8N_CONFIRM_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/confirm`;
     const url = `${baseConfirmUrl}?job_id=${encodeURIComponent(jobId)}&correlation_id=${encodeURIComponent(correlationIdValue)}`;
@@ -148,7 +113,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[upload-confirm] URL de confirmación:', url);
-    console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s data.length=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id, (finalPayload.data as unknown[])?.length ?? 0);
+    console.log('[upload-confirm] job_id=%s correlation_id=%s upload_id=%s', finalPayload.job_id, finalPayload.correlation_id, finalPayload.upload_id);
     console.log('[V2-05-Check] Enviando JobID a n8n: %s', jobId);
     console.log('[Payload-Debug]', JSON.stringify(finalPayload, null, 2));
     const payloadJson = JSON.stringify(finalPayload);

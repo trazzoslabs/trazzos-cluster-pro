@@ -930,7 +930,6 @@ export default function IngestionPage() {
       const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
         ? `${window.location.origin}/ingestion`
         : (appUrl?.trim() || '');
-      const dataRows = fileRowsRef.current ?? previewData ?? [];
       const payload = {
         upload_id: uploadIdStr,
         job_id: jobIdStr,
@@ -940,7 +939,6 @@ export default function IngestionPage() {
         cluster_id: FIXED_CLUSTER_ID,
         user_email: effectiveEmail,
         app_url: effectiveAppUrl || undefined,
-        data: dataRows,
       };
 
       const payloadJson = JSON.stringify(payload);
@@ -1156,9 +1154,8 @@ export default function IngestionPage() {
         dataset_type: datasetType,
         user_email: confirmEmail,
         app_url: confirmAppUrl || undefined,
-        data: fullRows,
       };
-      console.log('[handleUpload] JSON enviado a upload-confirm (data = filas, no sample_data):', fullRows.length);
+      console.log('[handleUpload] JSON enviado a upload-confirm (solo metadatos, n8n descarga desde Supabase)');
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
