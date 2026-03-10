@@ -109,15 +109,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const dataFromClient = dataRows;
     const effectiveAppUrl = app_url || 'https://trazzos-cluster-pro.vercel.app';
 
-    // Payload plano a n8n: datos directamente en la raíz (sin anidar data)
+    // Objeto plano a n8n: data es directamente el array de filas (no anidar data: { data: ... })
     const finalPayload = {
-      event_id: jobId,
       job_id: jobId,
       dataset_type,
-      data: dataFromClient,
+      data: dataRows,
       app_url: effectiveAppUrl,
       correlation_id: correlationIdValue,
       upload_id: uploadIdValue,
