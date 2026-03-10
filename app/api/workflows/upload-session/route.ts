@@ -80,19 +80,26 @@ export async function POST(request: NextRequest) {
 
     const webhookBaseUrl = N8N_WEBHOOK_URL || `${N8N_WEBHOOK_BASE}/api/upload/session`;
     const payload = {
-      // Campos originales de compatibilidad
+      // 1. Formato snake_case (Oficial de la documentación)
       company_id: companyId,
       user_id: userId,
+      file_name: fileName,
+      file_type: fileTypeForN8nValue,
       dataset_type: datasetType,
       job_id: generatedJobId,
       correlation_id: generatedCorrelationId,
 
-      // Campos redundantes para inserción directa en Supabase (Auto-map de n8n)
+      // 2. Formato camelCase (Posible mapeo interno en n8n)
+      companyId: companyId,
+      userId: userId,
+      fileName: fileName,
+      fileType: fileTypeForN8nValue,
+      datasetType: datasetType,
+      jobId: generatedJobId,
+      correlationId: generatedCorrelationId,
+
+      // 3. Formato directo a base de datos (Supabase auto-map)
       uploader_user_id: userId,
-      file_name: fileName,
-      fileName: fileName, // redundancia camelCase
-      file_type: fileTypeForN8nValue,
-      fileType: fileTypeForN8nValue, // redundancia camelCase
       declared_dataset_type: datasetType,
     };
 
