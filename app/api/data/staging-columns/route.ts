@@ -11,10 +11,8 @@ export async function GET(request: NextRequest) {
       return createErrorResponse('job_id query parameter is required', 400);
     }
 
-    // Determinar tabla staging sin depender de columnas extra en ingestion_jobs.
     const tableCandidates = ['stg_needs_rows', 'stg_shutdowns_rows'];
     let stagingTable: string | null = null;
-
     for (const tableName of tableCandidates) {
       const { data, error } = await supabaseServer
         .from(tableName)
@@ -27,48 +25,78 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (!stagingTable) {
-      return createSuccessResponse([]);
-    }
-
-    // Get a sample row to extract columns
-    const { data: sampleRows, error: rowsError } = await supabaseServer
-      .from(stagingTable)
-      .select('raw_json')
-      .eq('job_id', jobId)
-      .limit(10);
-
-    if (rowsError) {
-      console.error('Error fetching staging rows:', rowsError);
-      return createErrorResponse('Failed to fetch staging rows', 500);
-    }
-
-    // Extract unique column names from raw_json
     const columnsSet = new Set<string>();
-    if (sampleRows && sampleRows.length > 0) {
-      sampleRows.forEach((row) => {
-        if (row.raw_json && typeof row.raw_json === 'object') {
-          Object.keys(row.raw_json).forEach((key) => {
-            // Normalize key (UTF-8, trim)
-            const normalizedKey = key.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-            if (normalizedKey) {
-              columnsSet.add(normalizedKey);
-            }
-          });
-        }
-      });
+
+    // 1. Intento normal: Leer de staging
+    if (stagingTable) {
+      const { data: sampleRows } = await supabaseServer
+        .from(stagingTable)
+        .select('raw_json')
+        .eq('job_id', jobId)
+        .limit(10);
+      if (sampleRows && sampleRows.length > 0) {
+        sampleRows.forEach((row) => {
+          if (row.raw_json && typeof row.raw_json === 'object') {
+            Object.keys(row.raw_json).forEach((key) => {
+              const normalizedKey = key.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              if (normalizedKey) columnsSet.add(normalizedKey);
+            });
+          }
+        });
+      }
     }
 
-    // Convert to array and sort
+    // 2. FALLBACK INTELIGENTE: Si staging está vacío, leemos la propuesta del Workflow 3
+    if (columnsSet.size === 0) {
+      const { data: job } = await supabaseServer
+        .from('ingestion_jobs')
+        .select('upload_id, mapping_profile_id')
+        .eq('job_id', jobId)
+        .single();
+      if (job) {
+        let mappingProfileId = job.mapping_profile_id;
+        // Si el job no tiene el ID directo, rastreamos a través de uploads
+        if (!mappingProfileId && job.upload_id) {
+          const { data: upload } = await supabaseServer
+            .from('uploads')
+            .select('company_id, declared_dataset_type')
+            .eq('upload_id', job.upload_id)
+            .single();
+          if (upload) {
+            const { data: profile } = await supabaseServer
+              .from('mapping_profiles')
+              .select('mapping_profile_id')
+              .eq('company_id', upload.company_id)
+              .eq('dataset_type', upload.declared_dataset_type)
+              .order('updated_at', { ascending: false })
+              .limit(1)
+              .single();
+            if (profile) mappingProfileId = profile.mapping_profile_id;
+          }
+        }
+        if (mappingProfileId) {
+          const { data: profileData } = await supabaseServer
+            .from('mapping_profiles')
+            .select('mapping_json')
+            .eq('mapping_profile_id', mappingProfileId)
+            .single();
+          if (profileData?.mapping_json) {
+            Object.keys(profileData.mapping_json).forEach((key) => {
+              const normalizedKey = key.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+              if (normalizedKey) columnsSet.add(normalizedKey);
+            });
+          }
+        }
+      }
+    }
+
     const columns = Array.from(columnsSet).sort().map((col) => ({
       source_column: col,
       detected_at: new Date().toISOString(),
     }));
-
     return createSuccessResponse(columns);
   } catch (error) {
     console.error('Unexpected error in GET /api/data/staging-columns:', error);
     return createErrorResponse('Internal server error', 500);
   }
 }
-
