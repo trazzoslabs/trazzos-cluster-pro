@@ -59,6 +59,14 @@ export async function getIngestionJobByJobIdOrUploadId(id: string): Promise<Inge
     .eq('mapping_profile_id', trimmed)
     .maybeSingle();
   if (errProfile) throw new Error('Failed to fetch ingestion job by id');
+
+  const { data: byCorrelation, error: errCorrelation } = await supabaseServer
+    .from('ingestion_jobs')
+    .select(cols)
+    .eq('correlation_id', trimmed)
+    .maybeSingle();
+  if (!errCorrelation && byCorrelation) return byCorrelation as IngestionJobRow;
+
   return (byMappingProfile as IngestionJobRow) ?? null;
 }
 
