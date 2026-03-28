@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { CANONICAL_PURCHASE_ORDER_ENTITY_TYPE } from '@/lib/utils/normalization';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -22,7 +23,10 @@ interface Synergy {
 
 interface EvidenceRecord {
   evidence_id: string;
-  payload_hash_sha256: string | null;
+  payload_hash_sha256?: string | null;
+  tx_hash?: string | null;
+  simulated_transaction_hash?: string | null;
+  is_sandbox_transaction?: boolean;
   created_at: string | null;
 }
 
@@ -47,12 +51,14 @@ function SynergiesContent() {
     category: string;
     hash: string | null;
     error: string | null;
+    sandbox: boolean;
   }>({
     open: false,
     loading: false,
     category: '',
     hash: null,
     error: null,
+    sandbox: false,
   });
 
   useEffect(() => {
@@ -258,6 +264,7 @@ function SynergiesContent() {
       category: synergy.item_category || 'Sinergia',
       hash: null,
       error: null,
+      sandbox: false,
     });
 
     try {
@@ -277,18 +284,25 @@ function SynergiesContent() {
         throw new Error('No se encontró orden de compra para este RFP.');
       }
 
-      const evidenceRes = await fetch(`/api/data/evidence?entity_type=purchase_order&entity_id=${poId}`);
+      const evidenceRes = await fetch(
+        `/api/data/evidence?entity_type=${encodeURIComponent(CANONICAL_PURCHASE_ORDER_ENTITY_TYPE)}&entity_id=${poId}`,
+      );
       const evidenceJson = evidenceRes.ok ? await evidenceRes.json() : { data: [] };
       const evidence = (evidenceJson?.data?.[0] || null) as EvidenceRecord | null;
 
-      if (!evidence?.payload_hash_sha256) {
+      const payloadHash = evidence?.payload_hash_sha256?.trim() ?? '';
+      const chainOrSandboxTx = evidence?.tx_hash?.trim() ?? '';
+      const sandbox = Boolean(evidence?.is_sandbox_transaction);
+
+      if (!payloadHash && !chainOrSandboxTx) {
         throw new Error('No se encontró hash de evidencia para la adjudicación.');
       }
 
       setEvidenceModal((prev) => ({
         ...prev,
         loading: false,
-        hash: evidence.payload_hash_sha256,
+        hash: payloadHash || chainOrSandboxTx,
+        sandbox,
       }));
     } catch (err) {
       setEvidenceModal((prev) => ({
@@ -559,7 +573,16 @@ function SynergiesContent() {
                 <p className="text-zinc-400 text-xs mt-1">{evidenceModal.category}</p>
               </div>
               <button
-                onClick={() => setEvidenceModal({ open: false, loading: false, category: '', hash: null, error: null })}
+                onClick={() =>
+                  setEvidenceModal({
+                    open: false,
+                    loading: false,
+                    category: '',
+                    hash: null,
+                    error: null,
+                    sandbox: false,
+                  })
+                }
                 className="text-zinc-400 hover:text-white text-sm"
               >
                 Cerrar
@@ -571,10 +594,19 @@ function SynergiesContent() {
             ) : evidenceModal.error ? (
               <p className="text-red-300 text-sm">{evidenceModal.error}</p>
             ) : (
-              <div className="space-y-2">
-                <p className="text-zinc-400 text-xs">Hash SHA-256</p>
-                <div className="bg-zinc-950 border border-zinc-800 rounded-md p-3">
-                  <p className="text-[#9aff8d] font-mono text-xs break-all">{evidenceModal.hash}</p>
+              <div className="space-y-3">
+                {evidenceModal.sandbox && (
+                  <p className="rounded-md border border-amber-600/40 bg-amber-950/50 px-3 py-2 text-sm text-amber-100">
+                    Verificado en Sandbox
+                  </p>
+                )}
+                <div>
+                  <p className="text-zinc-400 text-xs">
+                    {evidenceModal.sandbox ? 'Huella / transacción (sandbox)' : 'Hash SHA-256'}
+                  </p>
+                  <div className="mt-1 bg-zinc-950 border border-zinc-800 rounded-md p-3">
+                    <p className="text-[#9aff8d] font-mono text-xs break-all">{evidenceModal.hash}</p>
+                  </div>
                 </div>
               </div>
             )}

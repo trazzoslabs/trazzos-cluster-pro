@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { CANONICAL_PURCHASE_ORDER_ENTITY_TYPE, normalizeEntityType } from '@/lib/utils/normalization';
 import PageTitle from '../components/ui/PageTitle';
 import StepCard from '../components/ui/StepCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -45,7 +46,11 @@ interface EvidenceRecord {
   evidence_id: string;
   entity_type: string;
   entity_id: string;
+  entity_type_normalized?: string;
   payload_hash_sha256: string | null;
+  tx_hash?: string | null;
+  simulated_transaction_hash?: string | null;
+  is_sandbox_transaction?: boolean;
   created_at: string | null;
 }
 
@@ -161,14 +166,22 @@ export default function WorkbenchPage() {
         const pos = result.data || [];
         if (pos.length > 0) {
           setPurchaseOrder(pos[0]);
-          // Fetch evidence
-          const evidenceRes = await fetch(`/api/data/evidence?entity_type=purchase_order&entity_id=${pos[0].po_id}`);
+          const evidenceRes = await fetch(
+            `/api/data/evidence?entity_type=${encodeURIComponent(CANONICAL_PURCHASE_ORDER_ENTITY_TYPE)}&entity_id=${pos[0].po_id}`,
+          );
           if (evidenceRes.ok) {
             const evidenceData = await evidenceRes.json();
             if (evidenceData.data && evidenceData.data.length > 0) {
               setEvidence(evidenceData.data[0]);
+            } else {
+              setEvidence(null);
             }
+          } else {
+            setEvidence(null);
           }
+        } else {
+          setPurchaseOrder(null);
+          setEvidence(null);
         }
       }
     } catch (err) {
@@ -639,17 +652,39 @@ export default function WorkbenchPage() {
                     <CopyButton textToCopy={evidence.evidence_id} />
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Hash SHA256:</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-white font-mono text-xs">
-                      {evidence.payload_hash_sha256?.substring(0, 16)}...
-                    </span>
-                    {evidence.payload_hash_sha256 && (
-                      <CopyButton textToCopy={evidence.payload_hash_sha256} />
-                    )}
-                  </div>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-zinc-400">Tipo de entidad:</span>
+                  <span className="text-zinc-200 font-mono text-xs">
+                    {evidence.entity_type_normalized ?? normalizeEntityType(evidence.entity_type)}
+                  </span>
                 </div>
+                {evidence.payload_hash_sha256 ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">Hash SHA256:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-mono text-xs">
+                        {evidence.payload_hash_sha256.substring(0, 16)}...
+                      </span>
+                      <CopyButton textToCopy={evidence.payload_hash_sha256} />
+                    </div>
+                  </div>
+                ) : null}
+                {evidence.tx_hash ? (
+                  <div className="mt-3 rounded-md border border-zinc-700 bg-zinc-950/80 p-3">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="text-zinc-400 text-sm">Transacción</span>
+                      {evidence.is_sandbox_transaction ? (
+                        <span className="rounded border border-amber-600/40 bg-amber-950/60 px-2 py-0.5 text-xs font-medium text-amber-100">
+                          Verificado en Sandbox
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-white font-mono text-xs break-all">{evidence.tx_hash}</span>
+                      <CopyButton textToCopy={evidence.tx_hash} />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

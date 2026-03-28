@@ -14,10 +14,13 @@ export interface GeoCompany {
   status?: string;
   company_id?: string;
   site_id?: string;
+  /** Nombre comercial (evita mostrar solo UUID en UI). */
+  company_name?: string;
+  site_name?: string;
 }
 
 const MOCK_COMPANIES: GeoCompany[] = [
-  { id: 'reficar', name: 'Reficar (Ecopetrol)', lat: 10.3139, lng: -75.5114, category: 'Refinería', status: 'active' },
+  { id: 'reficar', name: 'Reficar (Ecopetrol)', lat: 10.3205, lng: -75.4952, category: 'Refinería', status: 'active' },
   { id: 'yara', name: 'Yara Colombia', lat: 10.3098, lng: -75.5165, category: 'Química', status: 'active' },
   { id: 'argos', name: 'Argos - Planta Cartagena', lat: 10.3958, lng: -75.4832, category: 'Cemento', status: 'active' },
   { id: 'ajover', name: 'Ajover S.A.', lat: 10.3972, lng: -75.4870, category: 'Plásticos', status: 'active' },
@@ -50,7 +53,16 @@ export async function getCompaniesGeo(): Promise<GeoCompany[]> {
         const name = (row.name ?? row.company_name ?? row.site_name ?? 'Empresa') as string;
 
         if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-          addCompany({ id: cid, name, lat, lng, category: row.city as string, status: row.status as string, company_id: cid });
+          addCompany({
+            id: cid,
+            name,
+            lat,
+            lng,
+            category: row.city as string,
+            status: row.status as string,
+            company_id: cid,
+            company_name: typeof row.company_name === 'string' ? row.company_name : name,
+          });
         } else {
           const mock = MOCK_COMPANIES.find((m) =>
             m.name.toLowerCase().includes(name.toLowerCase()) ||
@@ -110,15 +122,19 @@ export async function getCompaniesGeo(): Promise<GeoCompany[]> {
           const lng = Number(site.lng);
           if (isNaN(lat) || isNaN(lng)) continue;
 
+          const companyName =
+            company?.name != null ? String(company.name) : site.site_name != null ? String(site.site_name) : 'Empresa';
           addCompany({
             id: String(site.company_id ?? site.site_id ?? ''),
-            name: String(company?.name ?? site.site_name ?? 'Empresa'),
+            name: companyName,
             lat,
             lng,
             category: site.city != null ? String(site.city) : undefined,
             status: company?.status != null ? String(company.status) : undefined,
             company_id: site.company_id != null ? String(site.company_id) : undefined,
             site_id: site.site_id != null ? String(site.site_id) : undefined,
+            company_name: company?.name != null ? String(company.name) : undefined,
+            site_name: site.site_name != null ? String(site.site_name) : undefined,
           });
         }
       }
@@ -145,6 +161,7 @@ export async function getCompaniesGeo(): Promise<GeoCompany[]> {
               category: mock.category,
               status: co.status as string,
               company_id: co.company_id as string,
+              company_name: co.name as string,
             });
           }
         }

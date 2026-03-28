@@ -7,6 +7,19 @@ interface GeoCompany {
   lng: number;
   category?: string;
   status?: string;
+  company_name?: string;
+  site_name?: string;
+}
+
+function sidebarTitle(c: GeoCompany): string {
+  const cn = c.company_name?.trim();
+  if (cn) return cn;
+  const raw = c.name?.trim() ?? '';
+  const uuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
+  if (raw && !uuid) return raw;
+  if (c.site_name?.trim()) return c.site_name.trim();
+  return raw || 'Empresa';
 }
 
 interface GeoSidebarProps {
@@ -27,7 +40,7 @@ export default function GeoSidebar({
   return (
     <div className="fixed right-6 top-1/2 -translate-y-1/2 z-50 w-80 bg-zinc-900/95 backdrop-blur-sm border border-zinc-800 rounded-xl p-5 shadow-2xl">
       <div className="flex items-start justify-between mb-4">
-        <h3 className="text-white font-bold text-lg">{company.name}</h3>
+        <h3 className="text-white font-bold text-lg">{sidebarTitle(company)}</h3>
         <button
           onClick={onClose}
           className="text-zinc-400 hover:text-white transition-colors"

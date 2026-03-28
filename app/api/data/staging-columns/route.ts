@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { normalizeDatasetType } from '@/lib/utils/normalization';
 
 export async function GET(request: NextRequest) {
   try {
@@ -62,16 +63,19 @@ export async function GET(request: NextRequest) {
             .select('company_id, declared_dataset_type')
             .eq('upload_id', job.upload_id)
             .single();
-          if (upload) {
-            const { data: profile } = await supabaseServer
-              .from('mapping_profiles')
-              .select('mapping_profile_id')
-              .eq('company_id', upload.company_id)
-              .eq('dataset_type', upload.declared_dataset_type)
-              .order('updated_at', { ascending: false })
-              .limit(1)
-              .single();
-            if (profile) mappingProfileId = profile.mapping_profile_id;
+          if (upload?.company_id) {
+            const declaredNorm = normalizeDatasetType(upload.declared_dataset_type);
+            if (declaredNorm) {
+              const { data: profile } = await supabaseServer
+                .from('mapping_profiles')
+                .select('mapping_profile_id')
+                .eq('company_id', upload.company_id)
+                .ilike('dataset_type', declaredNorm)
+                .order('updated_at', { ascending: false })
+                .limit(1)
+                .single();
+              if (profile) mappingProfileId = profile.mapping_profile_id;
+            }
           }
         }
         if (mappingProfileId) {

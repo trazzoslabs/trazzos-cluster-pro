@@ -1,12 +1,15 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
+import { normalizeDatasetType } from '@/lib/utils/normalization';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_MAPPING_APPLY_URL = process.env.N8N_MAPPING_APPLY_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const ALLOWED_DATASET_TYPES = new Set(['needs', 'stocks', 'offers', 'shutdowns', 'suppliers']);
 
 type MappingPairN8n = { source_column: string; target_field: string };
 
@@ -21,7 +24,7 @@ function normalizeMappingInput(body: Record<string, unknown>): {
   pairs: MappingPairN8n[];
   record: Record<string, string>;
 } | null {
-  const m = body.mapping;
+  const m = body.mapping ?? body.mapping_json;
   if (m && typeof m === 'object' && !Array.isArray(m)) {
     const record: Record<string, string> = {};
     const pairs: MappingPairN8n[] = [];
@@ -92,7 +95,7 @@ export async function POST(request: NextRequest) {
     const normalized = normalizeMappingInput(body);
     if (!normalized) {
       return createErrorResponse(
-        'mapping es requerido: objeto { columna_origen: campo_destino } o array de { source_column, target_field }',
+        'mapping o mapping_json es requerido: objeto { columna_origen: campo_destino } o array de { source_column, target_field }',
         400,
       );
     }
@@ -136,11 +139,15 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('No se pudo resolver company_id del upload', 500);
     }
 
-    const datasetType = (
-      typeof upload.declared_dataset_type === 'string' && upload.declared_dataset_type.trim()
-        ? upload.declared_dataset_type.trim()
-        : 'needs'
-    ).toLowerCase();
+    const bodyDatasetRaw = normalizeDatasetType(
+      typeof body.dataset_type === 'string' ? body.dataset_type : '',
+    );
+    const uploadDatasetRaw = normalizeDatasetType(upload.declared_dataset_type);
+    const resolvedDatasetType = ALLOWED_DATASET_TYPES.has(bodyDatasetRaw)
+      ? bodyDatasetRaw
+      : ALLOWED_DATASET_TYPES.has(uploadDatasetRaw)
+        ? uploadDatasetRaw
+        : 'needs';
 
     const now = new Date().toISOString();
 
@@ -148,7 +155,7 @@ export async function POST(request: NextRequest) {
       {
         mapping_profile_id,
         company_id: upload.company_id,
-        dataset_type: datasetType,
+        dataset_type: resolvedDatasetType,
         schema_version: '1',
         mapping_json,
         active: true,
@@ -167,18 +174,19 @@ export async function POST(request: NextRequest) {
 
     const { error: linkErr } = await supabaseServer
       .from('ingestion_jobs')
-      .update({ mapping_profile_id })
+      .update({ mapping_profile_id, dataset_type: resolvedDatasetType })
       .eq('job_id', job_id);
 
     if (linkErr) {
-      console.error('[mapping-apply] No se pudo vincular mapping_profile_id al job:', linkErr);
+      console.error('[mapping-apply] No se pudo actualizar ingestion_jobs:', linkErr);
       return createErrorResponse('Perfil guardado pero no se pudo actualizar el job', 500);
     }
 
-    /** Contrato n8n: solo estos campos; `mapping` es lista de { source_column, target_field }. */
+    /** Contrato n8n: lista de pares; `dataset_type` sincronizado con ingestion_jobs antes de este POST. */
     const n8nPayload = {
       job_id,
       mapping_profile_id,
+      dataset_type: resolvedDatasetType,
       mapping: pairs,
     };
 
@@ -230,6 +238,15 @@ export async function POST(request: NextRequest) {
             : response.statusText;
       console.error('[mapping-apply] n8n error:', data);
       return createErrorResponse(`n8n workflow failed: ${msg}`, response.status);
+    }
+
+    const { error: uploadDoneErr } = await supabaseServer
+      .from('uploads')
+      .update({ status: 'completed' })
+      .eq('upload_id', uploadId)
+      .in('status', ['processing', 'pending', 'running', 'uploading']);
+    if (uploadDoneErr) {
+      console.warn('[mapping-apply] No se pudo marcar upload como completed:', uploadDoneErr.message);
     }
 
     return createSuccessResponse(

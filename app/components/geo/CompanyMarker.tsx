@@ -8,98 +8,150 @@ if (typeof window !== 'undefined') {
   mapboxgl = require('mapbox-gl');
 }
 
+export interface CompanyMarkerCompany {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  category?: string;
+  status?: string;
+  company_name?: string;
+  site_name?: string;
+}
+
 interface CompanyMarkerProps {
   map: any;
-  company: {
-    id: string;
-    name: string;
-    lat: number;
-    lng: number;
-    category?: string;
-    status?: string;
-  };
+  company: CompanyMarkerCompany;
+  /** Texto del popup al hacer clic (p. ej. company_name legible). */
+  displayLabel: string;
   isSelected: boolean;
   onClick: () => void;
+  /** Reficar + sinergia activa: color ámbar y pulso destacado. */
+  synergyActiveHighlight?: boolean;
 }
 
 export default function CompanyMarker({
   map,
   company,
+  displayLabel,
   isSelected,
   onClick,
+  synergyActiveHighlight = false,
 }: CompanyMarkerProps) {
   const markerRef = useRef<any>(null);
   const elRef = useRef<HTMLDivElement | null>(null);
+  const popupInnerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
-    // Crear elemento HTML para el marcador
     const el = document.createElement('div');
     el.className = 'company-marker';
-    el.style.width = isSelected ? '32px' : '24px';
-    el.style.height = isSelected ? '32px' : '24px';
     el.style.borderRadius = '50%';
-    el.style.backgroundColor = isSelected ? '#9aff8d' : '#9aff8d';
-    el.style.border = isSelected ? '3px solid white' : '2px solid white';
     el.style.cursor = 'pointer';
-    el.style.boxShadow = isSelected
-      ? '0 0 20px #9aff8d, 0 0 40px #9aff8d'
-      : '0 0 10px rgba(154, 255, 141, 0.5)';
     el.style.transition = 'all 0.3s ease';
     el.style.zIndex = isSelected ? '1000' : '100';
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
 
-    // Agregar pulso si está seleccionado
-    if (isSelected) {
-      el.style.animation = 'pulse 2s ease-in-out infinite';
-    }
+    const applyVisualState = () => {
+      if (!elRef.current) return;
+      const elNow = elRef.current;
+      const baseSize = isSelected ? 32 : 24;
+      elNow.style.width = `${baseSize}px`;
+      elNow.style.height = `${baseSize}px`;
+      elNow.style.border = isSelected ? '3px solid white' : '2px solid white';
 
-    // Crear marcador
+      if (synergyActiveHighlight) {
+        elNow.style.backgroundColor = isSelected ? '#fbbf24' : '#f59e0b';
+        elNow.style.border = isSelected ? '3px solid #fef3c7' : '2px solid #fde68a';
+        elNow.style.animation = 'reficar-synergy-pulse 1.6s ease-in-out infinite';
+        elNow.style.boxShadow = '0 0 16px rgba(251, 191, 36, 0.55)';
+      } else {
+        elNow.style.backgroundColor = isSelected ? '#9aff8d' : '#9aff8d';
+        elNow.style.boxShadow = isSelected
+          ? '0 0 20px #9aff8d, 0 0 40px #9aff8d'
+          : '0 0 10px rgba(154, 255, 141, 0.5)';
+        elNow.style.animation = isSelected ? 'pulse 2s ease-in-out infinite' : 'none';
+      }
+      elNow.style.zIndex = isSelected ? '1000' : synergyActiveHighlight ? '500' : '100';
+    };
+
+    applyVisualState();
+    elRef.current = el;
+
+    const popupContent = document.createElement('div');
+    popupInnerRef.current = popupContent;
+    popupContent.className = 'geo-marker-popup-inner';
+    popupContent.style.padding = '8px 10px';
+    popupContent.style.fontSize = '13px';
+    popupContent.style.fontWeight = '600';
+    popupContent.style.color = '#18181b';
+    popupContent.textContent = displayLabel;
+
+    const popup = new mapboxgl.Popup({
+      offset: 20,
+      closeButton: true,
+      closeOnClick: true,
+      maxWidth: '280px',
+      className: 'geo-company-popup',
+    }).setDOMContent(popupContent);
+
     const marker = new mapboxgl.Marker({
       element: el,
       anchor: 'center',
     })
       .setLngLat([company.lng, company.lat])
+      .setPopup(popup)
       .addTo(map);
 
-    // Agregar evento click
-    el.addEventListener('click', onClick);
+    const onMarkerClick = (e: MouseEvent) => {
+      e.stopPropagation();
+      popupContent.textContent = displayLabel;
+      onClick();
+    };
+    el.addEventListener('click', onMarkerClick);
 
     markerRef.current = marker;
-    elRef.current = el;
 
     return () => {
+      el.removeEventListener('click', onMarkerClick);
       if (markerRef.current) {
         markerRef.current.remove();
+        markerRef.current = null;
       }
-      if (elRef.current) {
-        elRef.current.removeEventListener('click', onClick);
-      }
+      popupInnerRef.current = null;
+      elRef.current = null;
     };
   }, [map, company.lat, company.lng, onClick]);
 
-  // Actualizar estilo cuando cambia la selección
+  useEffect(() => {
+    if (popupInnerRef.current) popupInnerRef.current.textContent = displayLabel;
+  }, [displayLabel]);
+
   useEffect(() => {
     if (!elRef.current) return;
+    const elNow = elRef.current;
+    const baseSize = isSelected ? 32 : 24;
+    elNow.style.width = `${baseSize}px`;
+    elNow.style.height = `${baseSize}px`;
+    elNow.style.border = isSelected ? '3px solid white' : '2px solid white';
 
-    elRef.current.style.width = isSelected ? '32px' : '24px';
-    elRef.current.style.height = isSelected ? '32px' : '24px';
-    elRef.current.style.border = isSelected ? '3px solid white' : '2px solid white';
-    elRef.current.style.boxShadow = isSelected
-      ? '0 0 20px #9aff8d, 0 0 40px #9aff8d'
-      : '0 0 10px rgba(154, 255, 141, 0.5)';
-    elRef.current.style.zIndex = isSelected ? '1000' : '100';
-
-    if (isSelected) {
-      elRef.current.style.animation = 'pulse 2s ease-in-out infinite';
+    if (synergyActiveHighlight) {
+      elNow.style.backgroundColor = isSelected ? '#fbbf24' : '#f59e0b';
+      elNow.style.border = isSelected ? '3px solid #fef3c7' : '2px solid #fde68a';
+      elNow.style.animation = 'reficar-synergy-pulse 1.6s ease-in-out infinite';
+      elNow.style.boxShadow = '0 0 16px rgba(251, 191, 36, 0.55)';
     } else {
-      elRef.current.style.animation = 'none';
+      elNow.style.backgroundColor = '#9aff8d';
+      elNow.style.boxShadow = isSelected
+        ? '0 0 20px #9aff8d, 0 0 40px #9aff8d'
+        : '0 0 10px rgba(154, 255, 141, 0.5)';
+      elNow.style.animation = isSelected ? 'pulse 2s ease-in-out infinite' : 'none';
     }
-  }, [isSelected]);
+    elNow.style.zIndex = isSelected ? '1000' : synergyActiveHighlight ? '500' : '100';
+  }, [isSelected, synergyActiveHighlight]);
 
   return null;
 }
-

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
+import { normalizeDatasetType } from '@/lib/utils/normalization';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
@@ -78,7 +79,7 @@ export async function POST(request: NextRequest) {
     const userId = String(form.get('user_id') || '').trim();
     const fileName = String(form.get('file_name') || inboundFile.name || '').trim();
     const fileType = String(form.get('file_type') || inboundFile.type || 'application/octet-stream').trim();
-    const datasetType = String(form.get('dataset_type') || '').trim().toLowerCase();
+    const datasetType = normalizeDatasetType(String(form.get('dataset_type') || ''));
 
     if (!companyId || !userId || !fileName || !fileType || !datasetType) {
       return createErrorResponse('company_id, user_id, file_name, file_type y dataset_type son requeridos', 400);

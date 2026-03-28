@@ -9,6 +9,7 @@ export interface IngestionJobRow {
   upload_id?: string | null;
   pipeline_version?: string | null;
   mapping_profile_id?: string | null;
+  dataset_type?: string | null;
   status?: string | null;
   rows_total?: number | null;
   rows_ok?: number | null;
@@ -19,7 +20,11 @@ export interface IngestionJobRow {
 }
 
 export async function getIngestionJobs(jobId?: string | null): Promise<IngestionJobRow | IngestionJobRow[] | null> {
-  let query = supabaseServer.from('ingestion_jobs').select('job_id, status, upload_id, pipeline_version, mapping_profile_id, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id');
+  let query = supabaseServer
+    .from('ingestion_jobs')
+    .select(
+      'job_id, status, upload_id, pipeline_version, mapping_profile_id, dataset_type, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id',
+    );
 
   if (jobId) {
     const { data, error } = await query.eq('job_id', jobId).maybeSingle();
@@ -33,7 +38,7 @@ export async function getIngestionJobs(jobId?: string | null): Promise<Ingestion
 }
 
 const INGESTION_JOB_SELECT_COLS =
-  'job_id, status, upload_id, pipeline_version, mapping_profile_id, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id';
+  'job_id, status, upload_id, pipeline_version, mapping_profile_id, dataset_type, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id';
 
 type IngestionJobSingleColumn = 'job_id' | 'upload_id' | 'correlation_id' | 'mapping_profile_id';
 
@@ -87,6 +92,44 @@ async function findIngestionJobByColumn(value: string): Promise<IngestionJobRow 
  */
 export async function getIngestionJobByJobIdOrUploadId(id: string): Promise<IngestionJobRow | null> {
   return findIngestionJobByColumn(id);
+}
+
+export type N8nIngestionIdentifiers = {
+  jobId?: string;
+  uploadId?: string;
+  correlationId?: string;
+};
+
+/**
+ * Webhook n8n → finalize: prioridad explícita por campo (no mezclar UUIDs entre columnas).
+ * 1) job_id — 2) upload_id — 3) correlation_id
+ */
+/** Solo por `job_id` (sin cascada). Útil cuando el webhook envía `job_id` y debe existir esa fila. */
+export async function getIngestionJobByJobId(jobId: string): Promise<IngestionJobRow | null> {
+  const trimmed = jobId?.trim();
+  if (!trimmed) return null;
+  return queryIngestionJobBySingleColumn('job_id', trimmed);
+}
+
+export async function resolveIngestionJobForN8nPayload(
+  ids: N8nIngestionIdentifiers,
+): Promise<IngestionJobRow | null> {
+  const j = ids.jobId?.trim();
+  if (j) {
+    const row = await queryIngestionJobBySingleColumn('job_id', j);
+    if (row) return row;
+  }
+  const u = ids.uploadId?.trim();
+  if (u) {
+    const row = await queryIngestionJobBySingleColumn('upload_id', u);
+    if (row) return row;
+  }
+  const c = ids.correlationId?.trim();
+  if (c) {
+    const row = await queryIngestionJobBySingleColumn('correlation_id', c);
+    if (row) return row;
+  }
+  return null;
 }
 
 export async function updateIngestionJobStatus(jobId: string, status: 'completed'): Promise<void> {

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
-import { companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
+import { companyEntryId, companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
 import CompanyMarker from './CompanyMarker';
 
 // Importar Mapbox solo en el cliente para evitar problemas de SSR
@@ -11,16 +11,26 @@ if (typeof window !== 'undefined') {
   mapboxgl = require('mapbox-gl');
 }
 
-interface GeoCompany {
+/** Coordenadas de referencia Reficar (Cartagena / zona industrial). */
+export const REFICAR_MAP_LAT = 10.3205;
+export const REFICAR_MAP_LNG = -75.4952;
+const REFICAR_COORD_EPS = 0.035;
+
+/** UUID sandbox Reficar (ingesta fija). */
+const REFICAR_COMPANY_ID_SANDBOX = 'aaaa1111-1111-4111-a111-111111111111';
+
+export interface GeoCompany {
   id: string;
   name: string;
   lat: number;
   lng: number;
   category?: string;
   status?: string;
+  company_name?: string;
+  site_name?: string;
 }
 
-interface GeoMapProps {
+export type GeoMapProps = {
   companies: GeoCompany[];
   selectedCompanyId: string | null;
   onCompanySelect: (companyId: string) => void;
@@ -31,13 +41,71 @@ interface GeoMapProps {
     status: string | null;
     volume_total_json: VolumeTotalJsonValue;
   }>;
+};
+
+function hasValidLatLng(lat: unknown, lng: unknown): boolean {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return false;
+  return true;
+}
+
+function isLikelyUuid(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    s.trim(),
+  );
+}
+
+/** Etiqueta legible para popup: prioriza company_name y evita mostrar solo UUID. */
+export function mapMarkerDisplayLabel(company: GeoCompany): string {
+  const cn = company.company_name?.trim();
+  if (cn) return cn;
+  const sn = company.site_name?.trim();
+  const rawName = company.name?.trim() ?? '';
+  if (rawName && !isLikelyUuid(rawName)) return rawName;
+  if (sn) return sn;
+  return rawName || 'Empresa';
+}
+
+function isReficarSite(company: GeoCompany): boolean {
+  const label = `${company.name} ${company.company_name ?? ''} ${mapMarkerDisplayLabel(company)}`.toLowerCase();
+  if (label.includes('reficar')) return true;
+  const dLat = Math.abs(company.lat - REFICAR_MAP_LAT);
+  const dLng = Math.abs(company.lng - REFICAR_MAP_LNG);
+  return dLat <= REFICAR_COORD_EPS && dLng <= REFICAR_COORD_EPS;
+}
+
+function synergyEntryInvolvesReficar(entry: CompaniesInvolvedJson[number]): boolean {
+  const name = companyEntryName(entry).toLowerCase();
+  if (name.includes('reficar')) return true;
+  const id = companyEntryId(entry);
+  if (id && id.toLowerCase() === REFICAR_COMPANY_ID_SANDBOX) return true;
+  return false;
+}
+
+function isSynergyWorkflowActive(status: string | null): boolean {
+  const s = (status || '').trim().toLowerCase();
+  if (!s) return true;
+  return !['completed', 'failed', 'error', 'cancelled', 'closed', 'rejected'].includes(s);
+}
+
+function computeReficarSynergyActive(
+  synergies: GeoMapProps['synergies'],
+): boolean {
+  if (!synergies?.length) return false;
+  return synergies.some((synergy) => {
+    if (!isSynergyWorkflowActive(synergy.status)) return false;
+    const involved = synergy.companies_involved_json;
+    if (!Array.isArray(involved)) return false;
+    return involved.some((e) => synergyEntryInvolvesReficar(e));
+  });
 }
 
 export default function GeoMap({
   companies,
   selectedCompanyId,
   onCompanySelect,
-  is3DMode = true, // Siempre 3D por defecto
+  is3DMode = true,
   showConnections,
   synergies = [],
 }: GeoMapProps) {
@@ -45,9 +113,17 @@ export default function GeoMap({
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
-  useEffect(() => {
-    console.log('[GeoMap] Montando mapa. companies recibidas:', companies.length, companies.map(c => c.name));
+  const companiesWithCoords = useMemo(
+    () => companies.filter((c) => hasValidLatLng(c.lat, c.lng)),
+    [companies],
+  );
 
+  const reficarSynergyActive = useMemo(
+    () => computeReficarSynergyActive(synergies),
+    [synergies],
+  );
+
+  useEffect(() => {
     if (!mapContainerRef.current) return;
 
     const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
@@ -59,11 +135,10 @@ export default function GeoMap({
 
     mapboxgl.accessToken = mapboxToken;
 
-    // Inicializar mapa
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [-75.5, 10.33], // Cartagena
+      center: [-75.5, 10.33],
       zoom: 11,
       pitch: is3DMode ? 65 : 0,
       bearing: 0,
@@ -74,7 +149,6 @@ export default function GeoMap({
     map.on('load', () => {
       setMapLoaded(true);
 
-      // Activar terreno 3D si está en modo 3D
       if (is3DMode) {
         try {
           map.addSource('mapbox-dem', {
@@ -86,7 +160,6 @@ export default function GeoMap({
 
           map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
 
-          // Agregar sky layer
           map.addLayer({
             id: 'sky',
             type: 'sky',
@@ -107,7 +180,6 @@ export default function GeoMap({
     };
   }, [is3DMode]);
 
-  // Actualizar modo 3D/2D
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
 
@@ -119,7 +191,6 @@ export default function GeoMap({
         duration: 800,
       });
 
-      // Intentar agregar terreno si no está
       if (!map.getSource('mapbox-dem')) {
         try {
           map.addSource('mapbox-dem', {
@@ -141,13 +212,11 @@ export default function GeoMap({
     }
   }, [is3DMode, mapLoaded]);
 
-  // Dibujar conexiones de sinergias
   useEffect(() => {
     if (!mapRef.current || !mapLoaded || !showConnections) return;
 
     const map = mapRef.current;
 
-    // Remover capa anterior si existe
     if (map.getLayer('synergy-lines')) {
       map.removeLayer('synergy-lines');
     }
@@ -155,7 +224,6 @@ export default function GeoMap({
       map.removeSource('synergy-lines');
     }
 
-    // Crear GeoJSON para las líneas
     const features: any[] = [];
 
     synergies.forEach((synergy) => {
@@ -163,22 +231,24 @@ export default function GeoMap({
         const companiesInvolved = synergy.companies_involved_json;
         if (!Array.isArray(companiesInvolved) || companiesInvolved.length < 2) return;
 
-        // Encontrar coordenadas de las empresas involucradas
         const coords: [number, number][] = [];
         companiesInvolved.forEach((entry) => {
           const companyName = companyEntryName(entry);
-          const company = companies.find(c =>
-            c.name.toLowerCase().includes(companyName.toLowerCase()) ||
-            companyName.toLowerCase().includes(c.name.toLowerCase())
+          const company = companiesWithCoords.find(
+            (c) =>
+              c.name.toLowerCase().includes(companyName.toLowerCase()) ||
+              companyName.toLowerCase().includes(c.name.toLowerCase()) ||
+              (c.company_name &&
+                companyName.toLowerCase().includes(c.company_name.toLowerCase())),
           );
-          if (company) {
+          if (company && hasValidLatLng(company.lat, company.lng)) {
             coords.push([company.lng, company.lat]);
           }
         });
 
         if (coords.length >= 2) {
           const volume = extractVolumeTotal(synergy.volume_total_json);
-          const width = Math.max(1, Math.min(5, 1 + (volume / 1000000)));
+          const width = Math.max(1, Math.min(5, 1 + volume / 1000000));
 
           features.push({
             type: 'Feature',
@@ -188,8 +258,8 @@ export default function GeoMap({
             },
             properties: {
               status: synergy.status || 'pending',
-              volume: volume,
-              width: width,
+              volume,
+              width,
             },
           });
         }
@@ -238,14 +308,13 @@ export default function GeoMap({
         map.removeSource('synergy-lines');
       }
     };
-  }, [mapLoaded, showConnections, synergies, companies]);
+  }, [mapLoaded, showConnections, synergies, companiesWithCoords]);
 
-  // Fly to empresa seleccionada
   useEffect(() => {
     if (!mapRef.current || !mapLoaded || !selectedCompanyId) return;
 
-    const company = companies.find(c => c.id === selectedCompanyId);
-    if (!company) return;
+    const company = companiesWithCoords.find((c) => c.id === selectedCompanyId);
+    if (!company || !hasValidLatLng(company.lat, company.lng)) return;
 
     mapRef.current.flyTo({
       center: [company.lng, company.lat],
@@ -254,7 +323,7 @@ export default function GeoMap({
       bearing: Math.random() * 360,
       duration: 1200,
     });
-  }, [selectedCompanyId, mapLoaded, is3DMode, companies]);
+  }, [selectedCompanyId, mapLoaded, is3DMode, companiesWithCoords]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -263,7 +332,12 @@ export default function GeoMap({
       <div className="h-full w-full bg-black/50 rounded-lg border border-zinc-800 flex items-center justify-center">
         <div className="text-center p-8">
           <svg className="w-16 h-16 mx-auto mb-4 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+            />
           </svg>
           <p className="text-zinc-400 text-xl font-semibold mb-2">Mapbox Token Requerido</p>
           <p className="text-zinc-500 text-sm mb-4">
@@ -283,18 +357,20 @@ export default function GeoMap({
   return (
     <div className="relative h-full w-full">
       <div ref={mapContainerRef} className="h-full w-full rounded-lg overflow-hidden" />
-      
-      {/* Renderizar marcadores */}
-      {mapLoaded && mapRef.current && companies.map((company) => (
-        <CompanyMarker
-          key={company.id}
-          map={mapRef.current}
-          company={company}
-          isSelected={selectedCompanyId === company.id}
-          onClick={() => onCompanySelect(company.id)}
-        />
-      ))}
+
+      {mapLoaded &&
+        mapRef.current &&
+        companiesWithCoords.map((company) => (
+          <CompanyMarker
+            key={company.id}
+            map={mapRef.current}
+            company={company}
+            displayLabel={mapMarkerDisplayLabel(company)}
+            isSelected={selectedCompanyId === company.id}
+            synergyActiveHighlight={reficarSynergyActive && isReficarSite(company)}
+            onClick={() => onCompanySelect(company.id)}
+          />
+        ))}
     </div>
   );
 }
-

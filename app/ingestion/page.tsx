@@ -14,6 +14,7 @@ import {
   trazzosMappingSourceColumnsStorageKey,
   unwrapCsvHeaderLineIfWholeLineQuoted,
 } from '@/lib/ingestionFileExtract';
+import { normalizeDatasetType } from '@/lib/utils/normalization';
 
 interface SessionResponse {
   [key: string]: any;
@@ -750,7 +751,7 @@ export default function IngestionPage() {
       formData.append('job_id', generatedJobId);
       formData.append('file_name', uploadFileName);
       formData.append('file_type', sessionFileType);
-      formData.append('dataset_type', detectedType);
+      formData.append('dataset_type', normalizeDatasetType(detectedType));
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
       // Respaldo inmediato: persistir job_id y ref (V2-01 = misma id en confirm/polling).
@@ -1203,7 +1204,7 @@ export default function IngestionPage() {
       formData.append('user_id', FIXED_USER_ID);
       formData.append('file_name', sessionFileName);
       formData.append('file_type', sessionFileType);
-      formData.append('dataset_type', sessionDatasetType);
+      formData.append('dataset_type', normalizeDatasetType(sessionDatasetType));
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
       const sessionResponse = await fetch('/api/workflows/upload-session', {

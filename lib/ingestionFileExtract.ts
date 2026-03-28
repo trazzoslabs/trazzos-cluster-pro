@@ -20,9 +20,20 @@ export function trazzosMappingSourceColumnsStorageKey(jobId: string): string {
   return `trazzos_mapping_source_columns:${jobId}`;
 }
 
+/** Guarda cabeceras detectadas en el cliente para sobrevivir a F5 y evitar depender del staging en DB. */
+export function persistMappingSourceColumns(jobId: string, headers: string[]): void {
+  if (typeof window === 'undefined' || !jobId.trim() || headers.length === 0) return;
+  try {
+    sessionStorage.setItem(trazzosMappingSourceColumnsStorageKey(jobId), JSON.stringify(headers));
+  } catch {
+    /* quota u otro */
+  }
+}
+
 /**
  * Nombres de columna del archivo (CSV / JSON / JSONL), para mapeo sin depender del staging en DB.
- * La línea de cabecera CSV pasa por unwrapCsvHeaderLineIfWholeLineQuoted antes del split.
+ * CSV: la primera línea pasa por unwrapCsvHeaderLineIfWholeLineQuoted antes del split por delimitador,
+ * para quitar comillas envolventes cuando toda la línea viene como un solo campo.
  */
 export async function extractHeaders(file: File): Promise<string[] | null> {
   const ext = file.name.split('.').pop()?.toLowerCase();

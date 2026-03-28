@@ -26,8 +26,8 @@ import {
   YAxis,
 } from 'recharts';
 
-// Importar GeoMap dinámicamente para evitar problemas de SSR
-const GeoMap = dynamic(() => import('../components/geo/GeoMap'), {
+// Mapa del cluster (SynergyMap → GeoMap) sin SSR
+const SynergyMap = dynamic(() => import('../synergies/components/SynergyMap'), {
   ssr: false,
   loading: () => (
     <div className="h-[600px] bg-black/50 rounded-lg border border-zinc-800 flex items-center justify-center">
@@ -118,7 +118,7 @@ const COMPANIES = [
 
 // Coordenadas de empresas
 const COMPANY_COORDINATES: { [key: string]: { name: string; lat: number; lng: number } } = {
-  'Reficar': { name: 'Reficar (Ecopetrol)', lat: 10.3139, lng: -75.5114 },
+  'Reficar': { name: 'Reficar (Ecopetrol)', lat: 10.3205, lng: -75.4952 },
   'Yara': { name: 'Yara Colombia', lat: 10.3098, lng: -75.5165 },
   'Argos': { name: 'Argos - Planta Cartagena', lat: 10.3958, lng: -75.4832 },
   'Ajover': { name: 'Ajover S.A.', lat: 10.3972, lng: -75.4870 },
@@ -1277,7 +1277,7 @@ export default function IntelligencePage() {
               {/* Mapa */}
               <SectionCard title="Vista Geoespacial 3D" description="Explora el cluster desde una perspectiva geoespacial">
                 <div className="h-[600px] relative">
-                  <GeoMap
+                  <SynergyMap
                     companies={geoCompanies}
                     selectedCompanyId={geoSelectedCompanyId}
                     onCompanySelect={setGeoSelectedCompanyId}

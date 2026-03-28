@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { supabaseServer } from '../../_lib/supabaseServer';
 import { createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { queryEvidenceRecords } from '@/lib/services/evidence';
+import { normalizeEntityType } from '@/lib/utils/normalization';
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,19 +16,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const { data, error } = await supabaseServer
-      .from('evidence_records')
-      .select('*')
-      .eq('entity_type', entityType)
-      .eq('entity_id', entityId)
-      .order('created_at', { ascending: false });
+    const { data, error } = await queryEvidenceRecords(normalizeEntityType(entityType), entityId);
 
     if (error) {
       console.error('Error fetching evidence:', error);
       return createErrorResponse('Failed to fetch evidence', 500);
     }
 
-    return createSuccessResponse(data || []);
+    return createSuccessResponse(data);
   } catch (error) {
     console.error('Unexpected error in GET /api/data/evidence:', error);
     return createErrorResponse('Internal server error', 500);
