@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import PageTitle from '../../components/ui/PageTitle';
 import SectionCard from '../../components/ui/SectionCard';
@@ -160,6 +160,31 @@ export default function RfpDetailPage() {
     lead_time_days: '',
   });
 
+  /** Tras committee-decide: correlation_id devuelto por n8n (V2-09) para polling de auditoría (V2-10). */
+  const [committeeCorrelationId, setCommitteeCorrelationId] = useState<string | null>(null);
+  const [n8nPayloadHashPreview, setN8nPayloadHashPreview] = useState<string | null>(null);
+  const [committeeSubmitting, setCommitteeSubmitting] = useState(false);
+  const [committeeJustification, setCommitteeJustification] = useState('');
+  const [selectedCommitteeOfferId, setSelectedCommitteeOfferId] = useState('');
+  const [committeeFormError, setCommitteeFormError] = useState<string | null>(null);
+  const [pollingAudit, setPollingAudit] = useState(false);
+  const pollStopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const PO_EVIDENCE_TYPE = 'PO_SIMULATED_WITH_EVIDENCE';
+
+  const fetchAuditByEntity = useCallback(async () => {
+    if (!rfpId) return;
+    try {
+      const res = await fetch(`/api/data/audit-events?entity_id=${rfpId}&limit=80`);
+      if (res.ok) {
+        const result = await res.json();
+        setAuditEvents(result.data || []);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [rfpId]);
+
   // Load all data
   useEffect(() => {
     if (!rfpId) return;
@@ -248,6 +273,70 @@ export default function RfpDetailPage() {
 
     fetchData();
   }, [rfpId]);
+
+  useEffect(() => {
+    if (offers.length === 1 && !selectedCommitteeOfferId) {
+      setSelectedCommitteeOfferId(offers[0].offer_id);
+    }
+  }, [offers, selectedCommitteeOfferId]);
+
+  useEffect(() => {
+    if (!committeeCorrelationId) return;
+
+    const stop = () => {
+      if (pollStopRef.current) {
+        clearInterval(pollStopRef.current);
+        pollStopRef.current = null;
+      }
+      setPollingAudit(false);
+    };
+
+    let attempts = 0;
+    const maxAttempts = 80;
+
+    const tick = async () => {
+      attempts += 1;
+      if (attempts > maxAttempts) {
+        stop();
+        return;
+      }
+      try {
+        const res = await fetch(
+          `/api/data/audit-events?correlation_id=${encodeURIComponent(committeeCorrelationId)}&limit=50`
+        );
+        if (!res.ok) return;
+        const result = await res.json();
+        const rows: AuditEvent[] = result.data || [];
+        const hit = rows.find(
+          (e) => (e.event_type || '').toUpperCase() === PO_EVIDENCE_TYPE
+        );
+        if (hit) {
+          setAuditEvents((prev) => {
+            const byId = new Map(prev.map((e) => [e.event_id, e]));
+            rows.forEach((e) => byId.set(e.event_id, e));
+            return Array.from(byId.values()).sort(
+              (a, b) =>
+                new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+            );
+          });
+          await fetchAuditByEntity();
+          stop();
+          setCommitteeCorrelationId(null);
+          return;
+        }
+      } catch {
+        /* noop */
+      }
+    };
+
+    setPollingAudit(true);
+    void tick();
+    pollStopRef.current = setInterval(tick, 3000);
+
+    return () => {
+      stop();
+    };
+  }, [committeeCorrelationId, fetchAuditByEntity]);
 
   // Format currency
   const formatCurrency = (amount: number, currency: string | null = 'COP') => {
@@ -385,15 +474,85 @@ export default function RfpDetailPage() {
     }
   };
 
-  // Get latest audit event for trust panel
+  const handleCommitteeDecision = async (decision: 'approve' | 'reject') => {
+    if (!rfpId) return;
+    if (decision === 'approve' && !selectedCommitteeOfferId) {
+      setCommitteeFormError('Selecciona una oferta para aprobar.');
+      return;
+    }
+    setCommitteeFormError(null);
+    try {
+      setCommitteeSubmitting(true);
+      const res = await fetch('/api/workflows/committee-decide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rfp_id: rfpId,
+          decision,
+          justification: committeeJustification.trim() || null,
+          ...(decision === 'approve' ? { offer_id: selectedCommitteeOfferId } : {}),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json.error || json.message || 'Error al enviar decisión del comité');
+      }
+      const payload = json.data ?? json;
+      const cid =
+        (typeof payload?.correlation_id === 'string' && payload.correlation_id) ||
+        (typeof json.correlation_id === 'string' && json.correlation_id) ||
+        null;
+      const ph =
+        (typeof payload?.payload_hash_sha256 === 'string' && payload.payload_hash_sha256) ||
+        null;
+      if (cid) setCommitteeCorrelationId(cid);
+      if (ph) setN8nPayloadHashPreview(ph.trim().toLowerCase());
+      setCommitteeJustification('');
+
+      const [cdRes, poRes] = await Promise.all([
+        fetch(`/api/data/committee-decisions?rfp_id=${rfpId}`),
+        fetch(`/api/data/purchase-orders?rfp_id=${rfpId}`),
+      ]);
+      if (cdRes.ok) {
+        const r = await cdRes.json();
+        setCommitteeDecisions(r.data || []);
+      }
+      if (poRes.ok) {
+        const r = await poRes.json();
+        setPurchaseOrders(r.data || []);
+      }
+      await fetchAuditByEntity();
+    } catch (e) {
+      setCommitteeFormError(e instanceof Error ? e.message : 'Error al enviar decisión');
+    } finally {
+      setCommitteeSubmitting(false);
+    }
+  };
+
+  const poEvidenceEvent = auditEvents.find(
+    (e) => (e.event_type || '').toUpperCase() === PO_EVIDENCE_TYPE
+  );
   const latestAuditEvent = auditEvents.length > 0 ? auditEvents[0] : null;
+  const trustEvent = poEvidenceEvent || latestAuditEvent;
+  const displayCorrelation =
+    poEvidenceEvent?.correlation_id ||
+    trustEvent?.correlation_id ||
+    committeeCorrelationId ||
+    null;
+  const displayPayloadHash =
+    poEvidenceEvent?.payload_hash_sha256 ||
+    n8nPayloadHashPreview ||
+    trustEvent?.payload_hash_sha256 ||
+    null;
 
   // Stepper completion states
   const hasScoring = scoringRuns.length > 0;
   const hasOffers = offers.length > 0;
   const hasCommittee = committeeDecisions.length > 0;
   const hasPO = purchaseOrders.length > 0;
-  const hasAudit = auditEvents.length > 0;
+  const hasAudit =
+    auditEvents.some((e) => (e.event_type || '').toUpperCase() === PO_EVIDENCE_TYPE) ||
+    auditEvents.length > 0;
 
   return (
     <div>
@@ -411,36 +570,41 @@ export default function RfpDetailPage() {
           hasAudit={hasAudit}
         />
 
-        {/* Trust Panel */}
-        {latestAuditEvent && (
-          <SectionCard 
-            title="Confianza Verificable"
-            className="border-green-500/50"
-          >
-              <div className="space-y-3">
-                {latestAuditEvent.correlation_id && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Correlation ID:</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-zinc-300 font-mono">
-                        {latestAuditEvent.correlation_id.substring(0, 8)}...
-                      </span>
-                      <CopyButton textToCopy={latestAuditEvent.correlation_id} />
-                    </div>
+        {/* Confianza: PO_SIMULATED_WITH_EVIDENCE (auditoría) o preview desde respuesta n8n */}
+        {(displayCorrelation || displayPayloadHash) && (
+          <SectionCard title="Confianza Verificable" className="border-green-500/50">
+            <div className="space-y-4">
+              {pollingAudit && (
+                <p className="text-sm text-amber-200/90">
+                  Esperando evento de auditoría <span className="font-mono">{PO_EVIDENCE_TYPE}</span>…
+                </p>
+              )}
+              {poEvidenceEvent && (
+                <p className="text-xs text-green-400/90">
+                  Evidencia verificable registrada (hash anclado en cadena de auditoría).
+                </p>
+              )}
+              {displayCorrelation && (
+                <div>
+                  <span className="text-sm text-zinc-400 block mb-1">Correlation ID</span>
+                  <div className="flex items-start gap-2 flex-wrap">
+                    <span className="text-sm text-zinc-200 font-mono break-all">{displayCorrelation}</span>
+                    <CopyButton textToCopy={displayCorrelation} />
                   </div>
-                )}
-                {latestAuditEvent.payload_hash_sha256 && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-400">Hash SHA256:</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-zinc-300 font-mono">
-                        {latestAuditEvent.payload_hash_sha256.substring(0, 16)}...
-                      </span>
-                      <CopyButton textToCopy={latestAuditEvent.payload_hash_sha256} />
-                    </div>
+                </div>
+              )}
+              {displayPayloadHash && (
+                <div>
+                  <span className="text-sm text-zinc-400 block mb-1">
+                    payload_hash_sha256 <span className="text-zinc-500">(n8n / auditoría)</span>
+                  </span>
+                  <div className="flex items-start gap-2 flex-wrap">
+                    <span className="text-sm text-zinc-200 font-mono break-all">{displayPayloadHash}</span>
+                    <CopyButton textToCopy={displayPayloadHash} />
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+            </div>
           </SectionCard>
         )}
 
@@ -683,7 +847,61 @@ export default function RfpDetailPage() {
         </SectionCard>
 
         {/* Committee Decision Section */}
-        <SectionCard title="Decisión del Comité">
+        <SectionCard
+          title="Decisión del Comité"
+          description="Envía la decisión a n8n (V2-09); el correlation_id devuelto enlaza con la evidencia PO (V2-10)."
+        >
+            <div className="mb-6 p-4 rounded-lg border border-zinc-700 bg-zinc-900/50 space-y-3">
+              <label className="block text-sm text-zinc-400">Justificación</label>
+              <textarea
+                value={committeeJustification}
+                onChange={(e) => setCommitteeJustification(e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-600 text-zinc-200 text-sm focus:outline-none focus:ring-2 focus:ring-green-500/50"
+                placeholder="Motivo de la decisión del comité…"
+                disabled={committeeSubmitting}
+              />
+              {offers.length > 0 && (
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-1">Oferta a aprobar</label>
+                  <select
+                    value={selectedCommitteeOfferId}
+                    onChange={(e) => setSelectedCommitteeOfferId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-600 text-zinc-200 text-sm"
+                    disabled={committeeSubmitting}
+                  >
+                    <option value="">— Seleccionar —</option>
+                    {offers.map((o) => (
+                      <option key={o.offer_id} value={o.offer_id}>
+                        {o.offer_id.slice(0, 8)}… — {formatCurrency(o.price_total, o.currency)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {committeeFormError && (
+                <p className="text-sm text-red-400">{committeeFormError}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCommitteeDecision('approve')}
+                  disabled={committeeSubmitting || offers.length === 0}
+                  className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium"
+                >
+                  {committeeSubmitting ? 'Enviando…' : 'Aprobar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCommitteeDecision('reject')}
+                  disabled={committeeSubmitting}
+                  className="px-4 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white text-sm font-medium"
+                >
+                  {committeeSubmitting ? 'Enviando…' : 'Rechazar'}
+                </button>
+              </div>
+            </div>
+
             {loadingCommittee ? (
               <p className="text-zinc-400 text-sm">Cargando decisiones...</p>
             ) : errorCommittee ? (
@@ -691,7 +909,7 @@ export default function RfpDetailPage() {
                 <p className="text-red-300 text-sm">Error: {errorCommittee}</p>
               </div>
             ) : committeeDecisions.length === 0 ? (
-              <p className="text-zinc-400 text-sm">No hay decisiones del comité disponibles</p>
+              <p className="text-zinc-400 text-sm">No hay decisiones del comité registradas aún</p>
             ) : (
               <div className="space-y-4">
                 {committeeDecisions.map((decision) => (

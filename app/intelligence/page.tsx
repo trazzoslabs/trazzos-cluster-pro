@@ -41,6 +41,10 @@ const GeoMap = dynamic(() => import('../components/geo/GeoMap'), {
 
 import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
 import { companyEntryId, companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
+import {
+  TRAZZOS_MARTS_CHANNEL,
+  isMartsRefreshCompletedPayload,
+} from '@/lib/trazzosMartsBroadcast';
 
 interface Synergy {
   synergy_id: string;
@@ -139,79 +143,75 @@ export default function IntelligencePage() {
   const [geoSelectedCompanyId, setGeoSelectedCompanyId] = useState<string | null>(null);
   const [showConnections, setShowConnections] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const geoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** Estados de empresas para el mapa (mv_cluster / company_sites). */
+  const refreshCompaniesGeo = useCallback(async (reason: string) => {
+    try {
+      const geoRes = await fetch('/api/data/companies-geo');
+      if (!geoRes.ok) return;
+      const geoData = await geoRes.json();
+      const list = geoData.data || [];
+      console.log(`[Intelligence] companies-geo (${reason}):`, list.length, 'empresas');
+      setGeoCompanies(list);
+    } catch {
+      // refresco en segundo plano
+    }
+  }, []);
 
   useEffect(() => {
     loadData();
   }, []);
 
-  // Re-fetch datos geo cada 30s mientras la vista geoespacial esté activa
+  // Polling solo en pestaña geoespacial: se limpia al cambiar de pestaña
   useEffect(() => {
-    if (activeMode === 'geospatial') {
-      const refreshGeo = async () => {
-        try {
-          const [geoRes, synRes] = await Promise.all([
-            fetch('/api/data/companies-geo'),
-            fetch('/api/data/synergies'),
-          ]);
-          if (geoRes.ok) {
-            const geoData = await geoRes.json();
-            const list = geoData.data || [];
-            console.log('[Intelligence] geo refresh:', list.length, 'empresas');
-            setGeoCompanies(list);
-          }
-          if (synRes.ok) {
-            const synData = await synRes.json();
-            setSynergies(synData.data || []);
-          }
-        } catch {
-          // Silenciar errores de refresco automático
-        }
-      };
+    if (activeMode !== 'geospatial') return;
 
-      refreshGeo(); // Fetch inmediato al entrar al modo geospatial
-      geoIntervalRef.current = setInterval(refreshGeo, 30_000);
-      return () => {
-        if (geoIntervalRef.current) {
-          clearInterval(geoIntervalRef.current);
-          geoIntervalRef.current = null;
+    const tick = async () => {
+      await refreshCompaniesGeo('interval');
+      try {
+        const synRes = await fetch('/api/data/synergies');
+        if (synRes.ok) {
+          const synData = await synRes.json();
+          setSynergies(synData.data || []);
         }
-      };
-    }
-    // Limpiar intervalo al salir del modo geospatial
-    if (geoIntervalRef.current) {
-      clearInterval(geoIntervalRef.current);
-      geoIntervalRef.current = null;
-    }
-  }, [activeMode]);
+      } catch {
+        /* silenciar */
+      }
+    };
 
-  // Escuchar señal cross-page de marts_refresh_completed para recargar marcadores
+    void tick();
+    const intervalId = setInterval(tick, 30_000);
+    return () => clearInterval(intervalId);
+  }, [activeMode, refreshCompaniesGeo]);
+
+  // Escucha activa: `marts_refresh_completed` vía BroadcastChannel (mismo origen), p. ej. tras refresh en Ingesta.
+  // Sin recargar la página: actualiza datos del mapa geoespacial.
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
+
     try {
-      bc = new BroadcastChannel('trazzos_marts');
+      bc = new BroadcastChannel(TRAZZOS_MARTS_CHANNEL);
       bc.onmessage = (event) => {
-        if (event.data?.type === 'marts_refresh_completed') {
-          console.log('[Intelligence] marts_refresh_completed recibido, refrescando geo…', event.data.counts);
-          (async () => {
-            try {
-              const res = await fetch('/api/data/companies-geo');
-              if (res.ok) {
-                const body = await res.json();
-                const list = body.data || [];
-                console.log('[Intelligence] Geo reload post-refresh:', list.length, 'empresas');
-                setGeoCompanies(list);
-              }
-            } catch { /* silenciar */ }
-          })();
-        }
+        if (!isMartsRefreshCompletedPayload(event.data)) return;
+        const extra =
+          event.data && typeof event.data === 'object' && event.data !== null
+            ? (event.data as { counts?: unknown }).counts
+            : undefined;
+        console.log('[Intelligence] marts_refresh_completed → companies-geo', extra);
+        void refreshCompaniesGeo('broadcast');
       };
-    } catch { /* BroadcastChannel no soportado */ }
+    } catch {
+      /* BroadcastChannel no disponible */
+    }
 
     return () => {
-      try { bc?.close(); } catch { /* noop */ }
+      try {
+        bc?.close();
+      } catch {
+        /* noop */
+      }
     };
-  }, []);
+  }, [refreshCompaniesGeo]);
 
   const loadData = async () => {
     try {

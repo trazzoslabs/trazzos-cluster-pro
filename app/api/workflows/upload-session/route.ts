@@ -8,6 +8,21 @@ const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const SESSION_TIMEOUT_MS = 60_000;
 const ALLOWED_DATASET_TYPES = new Set(['shutdowns', 'needs', 'suppliers']);
 
+/**
+ * Si n8n devuelve solo la ruta (p. ej. /storage/v1/object/sign/...), antepone SUPABASE_URL.
+ * Las URLs absolutas http(s) se devuelven sin cambios.
+ */
+function resolveSupabaseSignedUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+  const base = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  if (!base) return trimmed;
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${base}${path}`;
+}
+
 /** MIME types → tipo corto para n8n (V2-02-SW-Detect-File-Type). Siempre minúsculas. */
 const MIME_TO_N8N_FILE_TYPE: Record<string, string> = {
   'text/csv': 'csv',
@@ -73,7 +88,8 @@ export async function POST(request: NextRequest) {
     }
 
     const generatedJobId = crypto.randomUUID();
-    const generatedCorrelationId = crypto.randomUUID();
+    /** Mismo valor que correlation_id en V2-02 (auditoría y trazabilidad por carga). */
+    const canonicalUploadId = crypto.randomUUID();
 
     const fileTypeForN8nValue = fileTypeForN8n(fileType, fileName);
     safeLog('[upload-session] file_type para n8n (V2-02-SW-Detect-File-Type):', fileTypeForN8nValue, '(original:', fileType + ')');
@@ -87,7 +103,8 @@ export async function POST(request: NextRequest) {
       file_type: fileTypeForN8nValue,
       dataset_type: datasetType,
       job_id: generatedJobId,
-      correlation_id: generatedCorrelationId,
+      correlation_id: canonicalUploadId,
+      upload_id: canonicalUploadId,
 
       // 2. Redundancia de Base de datos y camelCase
       companyId: companyId,
@@ -97,6 +114,7 @@ export async function POST(request: NextRequest) {
       datasetType: datasetType,
       uploader_user_id: userId,
       declared_dataset_type: datasetType,
+      uploadId: canonicalUploadId,
 
       // 3. ESQUEMA DE EVENTOS DE N8N (La clave para pasar el filtro)
       actor_user_id: userId,
@@ -111,7 +129,7 @@ export async function POST(request: NextRequest) {
       headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
     }
 
-    safeLog('[upload-session] → POST %s  job_id=%s correlation_id=%s', webhookBaseUrl, generatedJobId, generatedCorrelationId);
+    safeLog('[upload-session] → POST %s  job_id=%s upload_id/correlation_id=%s', webhookBaseUrl, generatedJobId, canonicalUploadId);
 
     let response: Response;
     try {
@@ -153,7 +171,7 @@ export async function POST(request: NextRequest) {
       return createErrorResponse(
         'Workflow de n8n falló. Revisa el historial de ejecuciones en n8n cloud.',
         response.status,
-        generatedCorrelationId,
+        canonicalUploadId,
       );
     }
 
@@ -169,21 +187,23 @@ export async function POST(request: NextRequest) {
 
     if (!signedUrl) {
       safeError('[upload-session] n8n respondió sin signed_url:', data);
-      return createErrorResponse('n8n no devolvió signed_url', 502, generatedCorrelationId);
+      return createErrorResponse('n8n no devolvió signed_url', 502, canonicalUploadId);
     }
+
+    const signedUrlAbsolute = resolveSupabaseSignedUrl(String(signedUrl));
 
     const uploadIdRaw =
       data?.upload_id ??
       data?.uploadId ??
       data?.data?.upload_id ??
       data?.data?.uploadId;
-    let upload_id = typeof uploadIdRaw === 'string' ? uploadIdRaw.trim() : '';
+    const fromN8n = typeof uploadIdRaw === 'string' ? uploadIdRaw.trim() : '';
+    let upload_id = fromN8n || canonicalUploadId;
 
-    if (!upload_id) {
-      safeLog('[upload-session] n8n no devolvió upload_id; creando registro en uploads para persistir ID');
-      const newUploadId = crypto.randomUUID();
+    if (!fromN8n) {
+      safeLog('[upload-session] n8n no devolvió upload_id; persistiendo canonicalUploadId en uploads');
       const { error: uploadInsertErr } = await supabaseServer.from('uploads').insert({
-        upload_id: newUploadId,
+        upload_id: canonicalUploadId,
         company_id: companyId,
         uploader_user_id: userId,
         file_name: fileName,
@@ -193,34 +213,34 @@ export async function POST(request: NextRequest) {
       });
       if (uploadInsertErr) {
         safeError('[upload-session] Error insertando uploads:', uploadInsertErr);
-        return createErrorResponse('No se pudo registrar el upload', 500, generatedCorrelationId);
+        return createErrorResponse('No se pudo registrar el upload', 500, canonicalUploadId);
       }
-      upload_id = newUploadId;
     }
 
     const { error: insertErr } = await supabaseServer
       .from('ingestion_jobs')
       .insert({
         job_id: generatedJobId,
+        upload_id,
         status: 'running',
-        correlation_id: generatedCorrelationId,
+        correlation_id: upload_id,
       });
 
     if (insertErr) {
       safeError('[upload-session] Error insertando ingestion_jobs:', insertErr);
-      return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500, generatedCorrelationId);
+      return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500, canonicalUploadId);
     }
 
     safeLog('[upload-session] ← %d OK job_id=%s upload_id=%s', response.status, generatedJobId, upload_id);
     return createSuccessResponse(
       {
         job_id: generatedJobId,
-        correlation_id: generatedCorrelationId,
+        correlation_id: upload_id,
         upload_id,
-        signed_url: signedUrl,
+        signed_url: signedUrlAbsolute,
       },
       200,
-      generatedCorrelationId,
+      upload_id,
     );
   } catch (error) {
     safeError('Unexpected error in POST /api/workflows/upload-session:', error);

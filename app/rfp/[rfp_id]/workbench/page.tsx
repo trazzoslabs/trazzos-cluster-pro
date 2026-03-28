@@ -282,8 +282,6 @@ export default function WorkbenchPage() {
       setSubmittingDecision(true);
       setErrorPOs(null);
 
-      const correlationId = crypto.randomUUID();
-
       const res = await fetch('/api/workflows/committee-decide', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -292,7 +290,6 @@ export default function WorkbenchPage() {
           offer_id: decision === 'approve' ? selectedOfferId : null,
           decision: decision,
           justification: justification || null,
-          correlation_id: correlationId,
         }),
       });
 
@@ -301,8 +298,13 @@ export default function WorkbenchPage() {
         throw new Error(result.error || 'Failed to submit decision');
       }
 
-      // Save correlation ID
-      setLastCorrelationId(correlationId);
+      const resultJson = await res.json();
+      const payload = resultJson.data ?? resultJson;
+      const serverCorrelation =
+        (typeof payload?.correlation_id === 'string' && payload.correlation_id) ||
+        (typeof resultJson.correlation_id === 'string' && resultJson.correlation_id) ||
+        '';
+      if (serverCorrelation) setLastCorrelationId(serverCorrelation);
 
       // Reset justification
       setJustification('');

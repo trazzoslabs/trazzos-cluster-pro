@@ -7,6 +7,7 @@ import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
 import CopyButton from '../components/ui/CopyButton';
+import { publishMartsRefreshCompleted } from '@/lib/trazzosMartsBroadcast';
 
 interface SessionResponse {
   [key: string]: any;
@@ -286,7 +287,11 @@ export default function IngestionPage() {
     uploading: 'Subiendo a la nube',
     processing: 'Procesando sinergias',
   };
-  const buttonText = loadingSession ? (phaseLabel[uploadPhase] || 'Subiendo...') : 'Subir archivo';
+  const formBusy = loadingSession || uploadPhase === 'processing';
+  const buttonText = formBusy ? (phaseLabel[uploadPhase] || 'Procesando…') : 'Subir archivo';
+
+  /** Job que pasó a awaiting_mapping tras esta carga: CTA a pantalla de mapeo. */
+  const [awaitingMappingJobId, setAwaitingMappingJobId] = useState<string | null>(null);
 
   // Recent Jobs
   const [recentJobs, setRecentJobs] = useState<IngestionJob[]>([]);
@@ -418,12 +423,7 @@ export default function IngestionPage() {
             console.warn('[refreshMarts] ⚠ mv_cluster_companies tiene 0 filas después del refresh');
           }
         }
-        // Señalizar a otras pestañas/páginas que el refresh terminó
-        try {
-          const bc = new BroadcastChannel('trazzos_marts');
-          bc.postMessage({ type: 'marts_refresh_completed', ts: Date.now(), counts });
-          bc.close();
-        } catch { /* BroadcastChannel no soportado */ }
+        publishMartsRefreshCompleted(counts);
       } else {
         console.warn('[refreshMarts] Status:', res.status);
       }
@@ -438,6 +438,7 @@ export default function IngestionPage() {
     setCompletionToast(`Job ${jobId.substring(0, 8)}… completado`);
     handleRefreshMarts();
     clearTrackingIds();
+    setAwaitingMappingJobId(null);
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -449,6 +450,24 @@ export default function IngestionPage() {
     setTimeout(() => setCompletionToast(null), 8000);
   }, [handleRefreshMarts]);
 
+  const runAwaitingMappingLogic = useCallback((targetJobId: string) => {
+    setAwaitingMappingJobId(targetJobId);
+    setUploadPhase('idle');
+    setLoadingSession(false);
+    setLoadingConfirm(false);
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    if (autoCompleteTimeoutRef.current) {
+      clearTimeout(autoCompleteTimeoutRef.current);
+      autoCompleteTimeoutRef.current = null;
+    }
+    setCompletionToast('Mapeo de columnas requerido');
+    setTimeout(() => setCompletionToast(null), 10_000);
+    fetchRecentJobs();
+  }, []);
+
   // Polling de estado: solo job_id identifica cada job. correlation_id no se usa para búsqueda (evita 'undefined' si el flujo se reinició).
   const startJobPolling = useCallback(() => {
     if (pollingRef.current) return;
@@ -459,6 +478,7 @@ export default function IngestionPage() {
         if (!response.ok) return;
         const result = await response.json();
         const jobs: IngestionJob[] = (result.data || []).slice(0, 10);
+        const tracked = getTrackedJobId();
 
         jobs.forEach(job => {
           const prev = prevJobStatusRef.current.get(job.job_id);
@@ -466,6 +486,14 @@ export default function IngestionPage() {
           const wasRunning = prev && ['running', 'processing', 'pending', 'uploading', 'updating'].includes(prev.toLowerCase());
           if (wasRunning && curr === 'completed') {
             runJobCompletedLogic(job.job_id);
+          }
+          if (
+            tracked &&
+            job.job_id === tracked &&
+            curr === 'awaiting_mapping' &&
+            prev?.toLowerCase() !== 'awaiting_mapping'
+          ) {
+            runAwaitingMappingLogic(job.job_id);
           }
         });
 
@@ -485,7 +513,7 @@ export default function IngestionPage() {
         // Silenciar errores de polling
       }
     }, 10_000);
-  }, [runJobCompletedLogic]);
+  }, [runJobCompletedLogic, runAwaitingMappingLogic, getTrackedJobId]);
 
   // Suscripción Realtime: solo job_id (UUID) como llave de búsqueda. correlation_id no se usa aquí (es auditoría).
   useEffect(() => {
@@ -510,6 +538,11 @@ export default function IngestionPage() {
             fetchRecentJobs();
             realtimeChannelRef.current?.unsubscribe();
             realtimeChannelRef.current = null;
+          } else if (status === 'awaiting_mapping') {
+            runAwaitingMappingLogic(newRow.job_id ?? trackedId);
+            fetchRecentJobs();
+            realtimeChannelRef.current?.unsubscribe();
+            realtimeChannelRef.current = null;
           }
         }
       )
@@ -521,7 +554,7 @@ export default function IngestionPage() {
       channel.unsubscribe();
       realtimeChannelRef.current = null;
     };
-  }, [jobId, runJobCompletedLogic, getTrackedJobId]);
+  }, [jobId, runJobCompletedLogic, runAwaitingMappingLogic, getTrackedJobId]);
 
   const handleForceComplete = useCallback(async (forceJobId: string) => {
     try {
@@ -1041,6 +1074,7 @@ export default function IngestionPage() {
     setGlobalError(null);
     setErrorSession(null);
     setSuccessSession(false);
+    setAwaitingMappingJobId(null);
     setUploadPhase('idle');
 
     try {
@@ -1178,6 +1212,7 @@ export default function IngestionPage() {
       setPreviewData([]);
       persistTrackingIds({ jobId: confirmJobId, uploadId: confirmUploadId, correlationId: confirmCorrelationId });
       fetchRecentJobs();
+      startJobPolling();
     } catch (err) {
       console.log('[upload] error:', err);
       setGlobalError(err instanceof Error ? err.message : 'Error al subir archivo');
@@ -1337,19 +1372,37 @@ export default function IngestionPage() {
           </div>
         )}
 
-        {successSession && (
+        {successSession && !awaitingMappingJobId && (
           <div className="bg-green-900/20 border border-green-800 rounded-lg p-3 mb-4">
             <p className="text-green-300 text-sm">Archivo recibido, procesando sinergias...</p>
           </div>
         )}
 
+        {awaitingMappingJobId && (
+          <div className="mb-6 rounded-xl border-2 border-[#9aff8d]/60 bg-[#9aff8d]/10 p-6 shadow-lg shadow-[#9aff8d]/10">
+            <p className="text-white font-semibold text-lg mb-1">Mapeo de columnas requerido</p>
+            <p className="text-zinc-300 text-sm mb-4">
+              El pipeline detuvo la carga en este job hasta que definas el mapeo. Continúa en la pantalla de configuración.
+            </p>
+            <Link
+              href={`/ingestion/mapping/${awaitingMappingJobId}`}
+              className="inline-flex w-full sm:w-auto justify-center items-center px-8 py-4 rounded-lg bg-[#9aff8d] hover:bg-[#9aff8d]/90 text-[#232323] font-bold text-base transition-colors shadow-md"
+            >
+              Configurar Mapeo
+            </Link>
+          </div>
+        )}
+
         <form onSubmit={handleUpload} className="space-y-4">
-          {uploadPhase !== 'idle' && (
-            <p className="text-sm text-zinc-300">{phaseLabel[uploadPhase]}</p>
+          {formBusy && uploadPhase !== 'idle' && (
+            <div className="flex items-center gap-3 text-sm text-zinc-300">
+              <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-[#9aff8d] border-t-transparent" />
+              <span>{phaseLabel[uploadPhase]}</span>
+            </div>
           )}
           <button
             type="submit"
-            disabled={loadingSession || !file}
+            disabled={formBusy || !file}
             className="w-full px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
           >
             {buttonText}
@@ -1509,10 +1562,10 @@ export default function IngestionPage() {
                       <p className="text-zinc-400 text-sm">Requiere mapeo de columnas</p>
                     </div>
                     <Link
-                      href={`/ingestion/jobs/${job.job_id}`}
+                      href={`/ingestion/mapping/${job.job_id}`}
                       className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-md transition-colors font-medium text-sm"
                     >
-                      Resolver mapeo
+                      Configurar Mapeo
                     </Link>
                   </div>
                 ))}

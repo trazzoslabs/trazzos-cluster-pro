@@ -7,6 +7,9 @@ import PageTitle from '../../../components/ui/PageTitle';
 import SectionCard from '../../../components/ui/SectionCard';
 import StatusBadge from '../../../components/ui/StatusBadge';
 import CopyButton from '../../../components/ui/CopyButton';
+import QualityAlertTable, {
+  type QualityIssueRow,
+} from '../../components/QualityAlertTable';
 
 interface IngestionJob {
   job_id: string;
@@ -67,6 +70,10 @@ export default function IngestionJobPage() {
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [mappingSuccess, setMappingSuccess] = useState(false);
   const autoMatchAppliedRef = useRef(false);
+
+  const [qualityIssues, setQualityIssues] = useState<QualityIssueRow[]>([]);
+  const [loadingQuality, setLoadingQuality] = useState(false);
+  const [errorQuality, setErrorQuality] = useState<string | null>(null);
 
   // Fetch job data
   const fetchJob = async () => {
@@ -155,6 +162,58 @@ export default function IngestionJobPage() {
       fetchStagingColumns();
     }
   }, [job?.status, jobId]);
+
+  // data_quality_issues cuando el job está terminado/analizado y hubo filas con error
+  useEffect(() => {
+    if (!jobId || !job) return;
+
+    const st = job.status?.toLowerCase() ?? '';
+    const showQuality =
+      (st === 'completed' || st === 'analyzed') && (job.rows_error ?? 0) > 0;
+
+    if (!showQuality) {
+      setQualityIssues([]);
+      setErrorQuality(null);
+      setLoadingQuality(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoadingQuality(true);
+        setErrorQuality(null);
+
+        const response = await fetch(
+          `/api/data/quality-issues?job_id=${encodeURIComponent(jobId)}`
+        );
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch quality issues: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        if (!cancelled) {
+          setQualityIssues(Array.isArray(result.data) ? result.data : []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorQuality(
+            err instanceof Error ? err.message : 'Failed to load quality issues'
+          );
+          setQualityIssues([]);
+        }
+        console.error('Error fetching quality issues:', err);
+      } finally {
+        if (!cancelled) setLoadingQuality(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, job?.rows_error]);
 
   // Polling: refresh every 5-10 seconds while job is not completed/error
   useEffect(() => {
@@ -511,6 +570,8 @@ export default function IngestionJobPage() {
 
   const statusExplanation = getStatusExplanation(job.status);
 
+  const showQualityAlerts = (job.rows_error ?? 0) > 0;
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -809,6 +870,20 @@ export default function IngestionJobPage() {
           </div>
         )}
       </SectionCard>
+
+      {showQualityAlerts && (
+        <SectionCard
+          title="Alertas de Calidad"
+          description="Errores detectados en canonicalización / upsert (V2-04): filas con issue_code en data_quality_issues"
+          className="border-amber-600/30"
+        >
+          <QualityAlertTable
+            rows={qualityIssues}
+            loading={loadingQuality}
+            error={errorQuality}
+          />
+        </SectionCard>
+      )}
 
       {/* Card 3: Tiempos */}
       <SectionCard 

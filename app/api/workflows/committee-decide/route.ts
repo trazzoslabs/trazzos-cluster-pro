@@ -1,25 +1,47 @@
 import { NextRequest } from 'next/server';
-import { createErrorResponse } from '../../_lib/http';
-import { supabaseServer } from '../../_lib/supabaseServer';
-import { createHash } from 'crypto';
 import {
-  buildMockPayloadHash,
-  isN8nMockEnabled,
-  resolveMockCorrelationId,
-  waitForMockLatency,
-} from '../../_lib/n8nMock';
+  createErrorResponse,
+  createSuccessResponse,
+  fetchWithTimeout,
+} from '../../_lib/http';
 
-// Generar SHA256 hash
-function sha256(data: string): string {
-  return createHash('sha256').update(data).digest('hex');
+const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
+const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function deepPickString(data: unknown, key: string): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const o = data as Record<string, unknown>;
+  const v = o[key];
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (o.data && typeof o.data === 'object') return deepPickString(o.data, key);
+  return undefined;
 }
 
+function extractCorrelationIdFromPayload(data: unknown): string | undefined {
+  const raw = deepPickString(data, 'correlation_id');
+  if (!raw || !UUID_RE.test(raw)) return undefined;
+  return raw;
+}
+
+function extractPayloadHashFromPayload(data: unknown): string | undefined {
+  const raw = deepPickString(data, 'payload_hash_sha256');
+  if (!raw || !/^[a-f0-9]{64}$/i.test(raw)) return undefined;
+  return raw.toLowerCase();
+}
+
+/**
+ * POST /api/workflows/committee-decide
+ * Proxy hacia n8n ({N8N_WEBHOOK_BASE}/committee/decide).
+ * El backend industrial crea PO/evidencia; el correlation_id para polling viene en la respuesta de n8n.
+ */
 export async function POST(request: NextRequest) {
   try {
-    let body;
+    let body: Record<string, unknown>;
     try {
       body = await request.json();
-    } catch (error) {
+    } catch {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
@@ -27,16 +49,12 @@ export async function POST(request: NextRequest) {
     const decision = body?.decision;
     const offerId = body?.offer_id;
     const justification = body?.justification;
-    const decidedByUserId = body?.decided_by_user_id;
-    const actorRole = body?.actor_role || 'committee';
-    const companyId = body?.company_id;
 
-    // Validar campos requeridos
-    if (!rfpId) {
+    if (!rfpId || typeof rfpId !== 'string') {
       return createErrorResponse('rfp_id is required', 400);
     }
 
-    if (!decision) {
+    if (!decision || typeof decision !== 'string') {
       return createErrorResponse('decision is required', 400);
     }
 
@@ -44,242 +62,94 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('decision must be "approve" or "reject"', 400);
     }
 
-    if (decision === 'approve' && !offerId) {
+    if (decision === 'approve' && (offerId === undefined || offerId === null || offerId === '')) {
       return createErrorResponse('offer_id is required when decision is "approve"', 400);
     }
 
-    const correlationId = resolveMockCorrelationId(body?.correlation_id);
-    if (isN8nMockEnabled()) {
-      await waitForMockLatency();
+    if (!N8N_WEBHOOK_BASE) {
+      return createErrorResponse('N8N_WEBHOOK_BASE environment variable is not set', 500);
     }
 
-    const decidedAt = new Date().toISOString();
+    const url = `${N8N_WEBHOOK_BASE.replace(/\/$/, '')}/committee/decide`;
 
-    // 1. Insertar en committee_decisions
-    const decisionData: any = {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+    };
+
+    if (N8N_WEBHOOK_TOKEN) {
+      headers['Authorization'] = `Bearer ${N8N_WEBHOOK_TOKEN}`;
+    }
+
+    // V2-09: cuerpo mínimo hacia n8n; offer_id solo si aprueba (V2-10 PO + evidencia).
+    const outbound: Record<string, unknown> = {
       rfp_id: rfpId,
-      decision: decision,
-      decided_at: decidedAt,
+      decision,
+      justification: justification ?? null,
     };
-
-    if (justification !== undefined && justification !== null) {
-      decisionData.justification = justification;
+    if (decision === 'approve' && offerId != null && String(offerId).trim() !== '') {
+      outbound.offer_id = offerId;
     }
 
-    if (decidedByUserId !== undefined && decidedByUserId !== null) {
-      decisionData.decided_by_user_id = decidedByUserId;
-    }
-
-    const { data: decisionRow, error: decisionError } = await supabaseServer
-      .from('committee_decisions')
-      .insert(decisionData)
-      .select('*')
-      .single();
-
-    if (decisionError) {
-      console.error('Error inserting committee decision:', decisionError);
-      return Response.json(
-        { ok: false, error: `Failed to insert committee decision: ${decisionError.message}` },
-        { status: 500 }
-      );
-    }
-
-    // 2. Insertar audit_events para la decisión
-    const decisionPayload = {
-      rfp_id: rfpId,
-      offer_id: offerId || null,
-      decision: decision,
-      justification: justification || null,
-      decided_by_user_id: decidedByUserId || null,
-      decided_at: decidedAt,
-    };
-
-    const decisionPayloadHash = sha256(JSON.stringify(decisionPayload));
-
-    const auditDecisionData: any = {
-      correlation_id: correlationId,
-      event_type: 'committee_decision_recorded',
-      entity_type: 'rfp',
-      entity_id: rfpId,
-      summary: `Committee decision: ${decision}`,
-      payload_hash_sha256: decisionPayloadHash,
-      created_at: decidedAt,
-    };
-
-    if (decidedByUserId !== undefined && decidedByUserId !== null) {
-      auditDecisionData.actor_user_id = decidedByUserId;
-    }
-
-    if (actorRole) {
-      auditDecisionData.actor_role = actorRole;
-    }
-
-    if (companyId !== undefined && companyId !== null) {
-      auditDecisionData.company_id = companyId;
-    }
-
-    const { error: auditDecisionError } = await supabaseServer
-      .from('audit_events')
-      .insert(auditDecisionData);
-
-    if (auditDecisionError) {
-      console.error('Error inserting audit event for decision:', auditDecisionError);
-      // No fallar, solo loguear
-    }
-
-    // 3. Si decision !== "approve", responder
-    if (decision !== 'approve') {
-      const simulatedPayloadHash = buildMockPayloadHash({
-        correlation_id: correlationId,
-        rfp_id: rfpId,
-        decision,
-        decided_at: decidedAt,
-      });
-      return Response.json(
-        {
-          ok: true,
-          decision: decisionRow,
-          purchase_order: null,
-          evidence: null,
-          event_type: 'PO_SIMULATED_WITH_EVIDENCE',
-          summary: 'Orden de compra generada con evidencia inmutable',
-          payload_hash_sha256: simulatedPayloadHash,
-          correlation_id: correlationId,
-        },
-        { status: 200 }
-      );
-    }
-
-    // 4. Si decision === "approve", crear PO y evidence
-    // a) Insertar en purchase_orders
-    const poData = {
-      rfp_id: rfpId,
-      offer_id: offerId,
-      status: 'created',
-      po_document_path: null,
-      evidence_id: null,
-      created_at: decidedAt,
-    };
-
-    const { data: purchaseOrderRow, error: poError } = await supabaseServer
-      .from('purchase_orders')
-      .insert(poData)
-      .select('*')
-      .single();
-
-    if (poError) {
-      console.error('Error inserting purchase order:', poError);
-      return Response.json(
-        { ok: false, error: `Failed to insert purchase order: ${poError.message}` },
-        { status: 500 }
-      );
-    }
-
-    // b) Crear evidence_records
-    const evidencePayload = {
-      decision_row: decisionRow,
-      purchase_order_row: purchaseOrderRow,
-    };
-
-    const evidencePayloadHash = sha256(JSON.stringify(evidencePayload));
-
-    const evidenceData = {
-      entity_type: 'purchase_order',
-      entity_id: purchaseOrderRow.po_id,
-      payload_hash_sha256: evidencePayloadHash,
-      tx_hash: null,
-      created_at: decidedAt,
-    };
-
-    const { data: evidenceRow, error: evidenceError } = await supabaseServer
-      .from('evidence_records')
-      .insert(evidenceData)
-      .select('*')
-      .single();
-
-    if (evidenceError) {
-      console.error('Error inserting evidence record:', evidenceError);
-      return Response.json(
-        { ok: false, error: `Failed to insert evidence record: ${evidenceError.message}` },
-        { status: 500 }
-      );
-    }
-
-    // c) Actualizar purchase_orders con evidence_id
-    const { data: updatedPORow, error: updatePOError } = await supabaseServer
-      .from('purchase_orders')
-      .update({ evidence_id: evidenceRow.evidence_id })
-      .eq('po_id', purchaseOrderRow.po_id)
-      .select('*')
-      .single();
-
-    if (updatePOError) {
-      console.error('Error updating purchase order with evidence_id:', updatePOError);
-      return Response.json(
-        { ok: false, error: `Failed to update purchase order: ${updatePOError.message}` },
-        { status: 500 }
-      );
-    }
-
-    // d) Insertar audit_events para PO creado
-    const auditPOData: any = {
-      correlation_id: correlationId,
-      event_type: 'purchase_order_created',
-      entity_type: 'purchase_order',
-      entity_id: purchaseOrderRow.po_id,
-      summary: 'Purchase order created',
-      payload_hash_sha256: evidencePayloadHash,
-      created_at: decidedAt,
-    };
-
-    if (decidedByUserId !== undefined && decidedByUserId !== null) {
-      auditPOData.actor_user_id = decidedByUserId;
-    }
-
-    if (actorRole) {
-      auditPOData.actor_role = actorRole;
-    }
-
-    if (companyId !== undefined && companyId !== null) {
-      auditPOData.company_id = companyId;
-    }
-
-    const { error: auditPOError } = await supabaseServer
-      .from('audit_events')
-      .insert(auditPOData);
-
-    if (auditPOError) {
-      console.error('Error inserting audit event for PO:', auditPOError);
-      // No fallar, solo loguear
-    }
-
-    // Responder con éxito
-    const simulatedPayloadHash = buildMockPayloadHash({
-      correlation_id: correlationId,
-      po_id: updatedPORow.po_id,
-      evidence_id: evidenceRow.evidence_id,
-      decided_at: decidedAt,
+    const response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(outbound),
     });
 
-    return Response.json(
-      {
-        ok: true,
-        decision: decisionRow,
-        purchase_order: updatedPORow,
-        evidence: evidenceRow,
-        event_type: 'PO_SIMULATED_WITH_EVIDENCE',
-        summary: 'Orden de compra generada con evidencia inmutable',
-        payload_hash_sha256: simulatedPayloadHash,
-        correlation_id: correlationId,
-      },
-      { status: 200 }
-    );
+    let data: unknown;
+    try {
+      const contentType = response.headers.get('content-type');
+      if (contentType?.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        data = text ? { message: text } : {};
+      }
+    } catch (parseErr) {
+      console.error('[committee-decide] Error parsing n8n response:', parseErr);
+      data = { error: 'Failed to parse response' };
+    }
+
+    const requestCorrelation =
+      typeof body.correlation_id === 'string' && UUID_RE.test(body.correlation_id)
+        ? body.correlation_id
+        : undefined;
+
+    if (!response.ok) {
+      const errPayload = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+      const message =
+        (typeof errPayload.error === 'string' && errPayload.error) ||
+        (typeof errPayload.message === 'string' && errPayload.message) ||
+        response.statusText;
+      console.error('[committee-decide] n8n error:', message, data);
+      return createErrorResponse(
+        `n8n workflow failed: ${message}`,
+        response.status,
+        requestCorrelation
+      );
+    }
+
+    const correlationFromN8n = extractCorrelationIdFromPayload(data);
+    const payloadHashFromN8n = extractPayloadHashFromPayload(data);
+
+    const responsePayload =
+      data && typeof data === 'object'
+        ? {
+            ...(data as Record<string, unknown>),
+            ...(correlationFromN8n ? { correlation_id: correlationFromN8n } : {}),
+            ...(payloadHashFromN8n ? { payload_hash_sha256: payloadHashFromN8n } : {}),
+          }
+        : {
+            correlation_id: correlationFromN8n,
+            payload_hash_sha256: payloadHashFromN8n,
+          };
+
+    return createSuccessResponse(responsePayload, response.status, correlationFromN8n);
   } catch (error) {
     console.error('Unexpected error in POST /api/workflows/committee-decide:', error);
-    return Response.json(
-      { ok: false, error: 'Internal server error' },
-      { status: 500 }
+    return createErrorResponse(
+      error instanceof Error ? error.message : 'Internal server error',
+      500
     );
   }
 }
-
