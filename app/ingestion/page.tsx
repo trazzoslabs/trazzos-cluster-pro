@@ -59,6 +59,7 @@ export default function IngestionPage() {
 
   // Error global para mostrar en alerta roja
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [mappingAppliedBanner, setMappingAppliedBanner] = useState(false);
 
   // User profile loading state
   const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
@@ -401,6 +402,19 @@ export default function IngestionPage() {
       if (pollingRef.current) clearInterval(pollingRef.current);
       if (autoCompleteTimeoutRef.current) clearTimeout(autoCompleteTimeoutRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('success') === 'mapping_applied' || q.get('mappingSuccess') === '1') {
+      setMappingAppliedBanner(true);
+      q.delete('success');
+      q.delete('mappingSuccess');
+      const qs = q.toString();
+      const path = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+      window.history.replaceState(null, '', path);
+    }
   }, []);
 
   const fetchUserProfile = async () => {
@@ -1306,6 +1320,25 @@ export default function IngestionPage() {
         title="Cargas de Datos"
         subtitle="Sube y procesa archivos para análisis y normalización"
       />
+
+      {mappingAppliedBanner && (
+        <div
+          role="status"
+          className="mb-6 rounded-xl border border-[#9aff8d]/50 bg-[#9aff8d]/15 px-4 py-3 text-zinc-100 shadow-md"
+        >
+          <p className="font-semibold text-[#9aff8d]">Mapeo aplicado. El procesamiento ha comenzado</p>
+          <p className="mt-1 text-sm text-zinc-300">
+            Puedes seguir el estado del job en la lista de cargas recientes.
+          </p>
+          <button
+            type="button"
+            onClick={() => setMappingAppliedBanner(false)}
+            className="mt-2 text-xs font-medium text-zinc-400 underline hover:text-zinc-200"
+          >
+            Cerrar aviso
+          </button>
+        </div>
+      )}
 
       {/* A. Subir archivo */}
       <SectionCard

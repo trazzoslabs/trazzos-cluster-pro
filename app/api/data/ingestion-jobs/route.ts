@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
       if (!trimmed) {
         return createErrorResponse('id no puede estar vacío', 400);
       }
-      // Mismo identificador en URL/query: job_id | upload_id | mapping_profile_id (y correlation_id en servicio)
+      // Resolver en orden: job_id → upload_id → correlation_id → mapping_profile_id (n8n puede guardar upload_id en correlation_id)
       const job = await getIngestionJobByJobIdOrUploadId(trimmed);
       if (!job) return createErrorResponse('Job no encontrado', 404);
       return createSuccessResponse(job);

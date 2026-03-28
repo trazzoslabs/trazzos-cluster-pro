@@ -1,99 +1,163 @@
 'use client';
 
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import PageTitle from '../../../components/ui/PageTitle';
+import IngestionMappingWorkflow from '../../components/IngestionMappingWorkflow';
 
 function normalizeMappingRouteId(raw: string | string[] | undefined): string | undefined {
   if (raw == null) return undefined;
   const s = Array.isArray(raw) ? raw[0] : raw;
-  const t = typeof s === 'string' ? s.trim() : '';
+  let t = typeof s === 'string' ? s.trim() : '';
+  if (!t) return undefined;
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    /* noop */
+  }
+  t = t.trim();
   return t.length > 0 ? t : undefined;
 }
 
+function extractJobIdFromResponse(json: unknown): string {
+  const payload = json as { data?: unknown } | null;
+  const job = payload?.data;
+  if (!job || typeof job !== 'object' || job === null) return '';
+  const id = (job as { job_id?: unknown }).job_id;
+  return typeof id === 'string' ? id.trim() : '';
+}
+
+const FETCH_TIMEOUT_MS = 14_000;
+const RETRY_DELAYS_MS = [0, 800, 2200];
+const OVERALL_DEADLINE_MS = 42_000;
+
+function fetchWithTimeout(
+  url: string,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+    fetch(url, { signal, cache: 'no-store' })
+      .then((res) => {
+        clearTimeout(to);
+        resolve(res);
+      })
+      .catch((e) => {
+        clearTimeout(to);
+        reject(e);
+      });
+  });
+}
+
 /**
- * Página de resolución: /ingestion/mapping/[id]
- * n8n (V2-03) puede enlazar con job_id, upload_id o mapping_profile_id.
- * GET /api/data/ingestion-jobs?id=… resuelve en ingestion_jobs y aquí redirigimos a /ingestion/jobs/[job_id].
+ * Enlace /ingestion/mapping/[id] (V2-03): resuelve id → job_id y muestra el mismo flujo de mapeo que /ingestion/jobs/[job_id].
  */
 export default function IngestionMappingPage() {
   const params = useParams();
-  const router = useRouter();
   const id = useMemo(() => normalizeMappingRouteId(params?.id as string | string[] | undefined), [params?.id]);
-  const [status, setStatus] = useState<'loading' | 'redirecting' | 'not-found'>('loading');
+  const [phase, setPhase] = useState<'resolving' | 'ready' | 'not-found'>('resolving');
+  const [resolvedJobId, setResolvedJobId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) {
-      setStatus('not-found');
+      setPhase('not-found');
       return;
     }
 
     let cancelled = false;
     const ac = new AbortController();
+    const deadlineTimer = window.setTimeout(() => {
+      if (!cancelled) setPhase('not-found');
+    }, OVERALL_DEADLINE_MS);
 
-    const resolveAndRedirect = async () => {
+    const run = async () => {
       const url = `/api/data/ingestion-jobs?id=${encodeURIComponent(id)}`;
-      try {
-        const res = await fetch(url, { signal: ac.signal, cache: 'no-store' });
+      for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
         if (cancelled) return;
-        if (!res.ok) {
-          setStatus('not-found');
-          return;
-        }
-        const json = await res.json().catch(() => null);
-        const job = json?.data;
-        const jobId =
-          job && typeof job === 'object' && typeof (job as { job_id?: unknown }).job_id === 'string'
-            ? (job as { job_id: string }).job_id.trim()
-            : '';
-        if (!jobId) {
-          setStatus('not-found');
-          return;
-        }
+        if (attempt > 0) await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
         if (cancelled) return;
-        setStatus('redirecting');
-        router.replace(`/ingestion/jobs/${encodeURIComponent(jobId)}`);
-      } catch (e) {
-        if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
-        if (!cancelled) setStatus('not-found');
+        try {
+          const res = await fetchWithTimeout(url, ac.signal, FETCH_TIMEOUT_MS);
+          if (cancelled) return;
+          if (res.ok) {
+            const json = await res.json().catch(() => null);
+            const jobId = extractJobIdFromResponse(json);
+            if (jobId) {
+              if (!cancelled) {
+                setResolvedJobId(jobId);
+                setPhase('ready');
+              }
+              return;
+            }
+          }
+        } catch {
+          /* siguiente intento */
+        }
       }
+      if (!cancelled) setPhase('not-found');
     };
 
-    resolveAndRedirect();
+    run();
     return () => {
       cancelled = true;
       ac.abort();
+      window.clearTimeout(deadlineTimer);
     };
-  }, [id, router]);
+  }, [id]);
+
+  const backButton = (
+    <Link
+      href="/ingestion"
+      className="mt-6 inline-flex items-center justify-center rounded-lg bg-[#9aff8d] px-6 py-3 text-base font-semibold text-[#232323] transition-colors hover:bg-[#9aff8d]/90"
+    >
+      Volver a Ingesta
+    </Link>
+  );
 
   if (!id) {
     return (
-      <div className="min-h-[40vh] flex flex-col items-center justify-center p-6 text-zinc-300">
-        <p className="text-lg">ID no proporcionado.</p>
-        <Link href="/ingestion" className="mt-4 text-[#9aff8d] hover:underline">
-          Volver a Cargas de Datos
-        </Link>
+      <div className="flex min-h-[40vh] flex-col items-center justify-center p-6 text-center text-zinc-300">
+        <p className="text-lg font-medium text-white">ID no válido o no proporcionado.</p>
+        {backButton}
       </div>
     );
   }
 
-  if (status === 'not-found') {
+  if (phase === 'not-found') {
     return (
-      <div className="min-h-[40vh] flex flex-col items-center justify-center p-6 text-zinc-300">
-        <p className="text-lg">No se encontró el job para este ID.</p>
-        <Link href="/ingestion" className="mt-4 text-[#9aff8d] hover:underline">
-          Volver a Cargas de Datos
-        </Link>
+      <div className="flex min-h-[40vh] flex-col items-center justify-center p-6 text-center text-zinc-300">
+        <p className="text-lg font-medium text-white">No encontramos un job para este ID</p>
+        <p className="mt-2 max-w-md text-sm text-zinc-400">
+          Usa el enlace del correo o vuelve a la lista de cargas.
+        </p>
+        {backButton}
+      </div>
+    );
+  }
+
+  if (phase === 'resolving' || !resolvedJobId) {
+    return (
+      <div className="flex min-h-[40vh] flex-col items-center justify-center p-6 text-zinc-300">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#9aff8d] border-t-transparent" />
+        <p className="mt-3 text-sm">Resolviendo enlace de mapeo…</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-[40vh] flex flex-col items-center justify-center p-6 text-zinc-300">
-      <div className="animate-pulse flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-[#9aff8d] border-t-transparent rounded-full animate-spin" />
-        <p>{status === 'loading' ? 'Cargando datos del job...' : 'Redirigiendo al mapeo…'}</p>
+    <div className="pb-10">
+      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <PageTitle title="Mapeo de columnas" subtitle={`Job ${resolvedJobId}`} />
+        <Link
+          href="/ingestion/jobs"
+          className="self-start rounded-md bg-zinc-700 px-4 py-2 text-sm text-white hover:bg-zinc-600 sm:self-auto"
+        >
+          ← Volver a Jobs
+        </Link>
       </div>
+      <IngestionMappingWorkflow jobId={resolvedJobId} showBackToJobsLink={false} />
     </div>
   );
 }

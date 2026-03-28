@@ -32,21 +32,16 @@ export async function getIngestionJobs(jobId?: string | null): Promise<Ingestion
   return (data ?? []) as IngestionJobRow[];
 }
 
-type IngestionJobLookupColumn =
-  | 'job_id'
-  | 'upload_id'
-  | 'mapping_profile_id'
-  | 'correlation_id';
-
 const INGESTION_JOB_SELECT_COLS =
   'job_id, status, upload_id, pipeline_version, mapping_profile_id, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id';
 
+type IngestionJobSingleColumn = 'job_id' | 'upload_id' | 'correlation_id' | 'mapping_profile_id';
+
 /**
- * Una fila por coincidencia en `ingestion_jobs`. `limit(1)` + `order` evita errores de PostgREST
- * si hubiera duplicados raros en upload_id; prioridad explícita entre consultas.
+ * Una sola consulta a `ingestion_jobs` por columna concreta.
  */
-async function findIngestionJobByColumn(
-  column: IngestionJobLookupColumn,
+async function queryIngestionJobBySingleColumn(
+  column: IngestionJobSingleColumn,
   value: string,
 ): Promise<IngestionJobRow | null> {
   const { data, error } = await supabaseServer
@@ -65,26 +60,33 @@ async function findIngestionJobByColumn(
 }
 
 /**
- * Resuelve un job para `/ingestion/mapping/[id]` y enlaces n8n V2-03.
- * Orden: job_id → upload_id → mapping_profile_id → correlation_id (extra, por si el workflow envía correlation).
+ * Resolución secuencial y no excluyente: cada paso solo se ejecuta si el anterior no devolvió fila.
+ * 1) job_id — 2) upload_id — 3) correlation_id (n8n a veces registra ahí el mismo UUID que sería upload_id) — 4) mapping_profile_id (V2-03).
  */
-export async function getIngestionJobByJobIdOrUploadId(id: string): Promise<IngestionJobRow | null> {
-  const trimmed = id?.trim();
+async function findIngestionJobByColumn(value: string): Promise<IngestionJobRow | null> {
+  const trimmed = value?.trim();
   if (!trimmed) return null;
 
-  const byJob = await findIngestionJobByColumn('job_id', trimmed);
-  if (byJob) return byJob;
+  const byJobId = await queryIngestionJobBySingleColumn('job_id', trimmed);
+  if (byJobId) return byJobId;
 
-  const byUpload = await findIngestionJobByColumn('upload_id', trimmed);
-  if (byUpload) return byUpload;
+  const byUploadId = await queryIngestionJobBySingleColumn('upload_id', trimmed);
+  if (byUploadId) return byUploadId;
 
-  const byMappingProfile = await findIngestionJobByColumn('mapping_profile_id', trimmed);
-  if (byMappingProfile) return byMappingProfile;
+  const byCorrelationId = await queryIngestionJobBySingleColumn('correlation_id', trimmed);
+  if (byCorrelationId) return byCorrelationId;
 
-  const byCorrelation = await findIngestionJobByColumn('correlation_id', trimmed);
-  if (byCorrelation) return byCorrelation;
+  const byMappingProfileId = await queryIngestionJobBySingleColumn('mapping_profile_id', trimmed);
+  if (byMappingProfileId) return byMappingProfileId;
 
   return null;
+}
+
+/**
+ * Resuelve un job para `/ingestion/mapping/[id]` y enlaces n8n (incl. upload_id duplicado en `correlation_id`).
+ */
+export async function getIngestionJobByJobIdOrUploadId(id: string): Promise<IngestionJobRow | null> {
+  return findIngestionJobByColumn(id);
 }
 
 export async function updateIngestionJobStatus(jobId: string, status: 'completed'): Promise<void> {

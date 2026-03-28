@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import PageTitle from '../../../components/ui/PageTitle';
@@ -10,6 +10,7 @@ import CopyButton from '../../../components/ui/CopyButton';
 import QualityAlertTable, {
   type QualityIssueRow,
 } from '../../components/QualityAlertTable';
+import IngestionMappingWorkflow from '../../components/IngestionMappingWorkflow';
 
 interface IngestionJob {
   job_id: string;
@@ -24,15 +25,6 @@ interface IngestionJob {
   ended_at: string | null;
   correlation_id: string | null;
   dataset_type?: string | null;
-}
-
-interface StagingColumn {
-  source_column: string;
-  detected_at: string;
-}
-
-interface ColumnMapping {
-  [sourceColumn: string]: string; // source_column -> target_field
 }
 
 interface AuditEvent {
@@ -59,17 +51,6 @@ export default function IngestionJobPage() {
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorAudit, setErrorAudit] = useState<string | null>(null);
-
-  // Mapping state
-  const [stagingColumns, setStagingColumns] = useState<StagingColumn[]>([]);
-  const [loadingColumns, setLoadingColumns] = useState(false);
-  const [errorColumns, setErrorColumns] = useState<string | null>(null);
-  const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
-  const [validatingMapping, setValidatingMapping] = useState(false);
-  const [applyingMapping, setApplyingMapping] = useState(false);
-  const [mappingError, setMappingError] = useState<string | null>(null);
-  const [mappingSuccess, setMappingSuccess] = useState(false);
-  const autoMatchAppliedRef = useRef(false);
 
   const [qualityIssues, setQualityIssues] = useState<QualityIssueRow[]>([]);
   const [loadingQuality, setLoadingQuality] = useState(false);
@@ -132,36 +113,6 @@ export default function IngestionJobPage() {
       setAuditEvents([]);
     }
   }, [job?.correlation_id]);
-
-  // Fetch staging columns when job status is awaiting_mapping
-  const fetchStagingColumns = async () => {
-    if (!jobId) return;
-
-    try {
-      setLoadingColumns(true);
-      setErrorColumns(null);
-
-      const response = await fetch(`/api/data/staging-columns?job_id=${jobId}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch staging columns: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      setStagingColumns(result.data || []);
-    } catch (err) {
-      setErrorColumns(err instanceof Error ? err.message : 'Failed to load staging columns');
-      console.error('Error fetching staging columns:', err);
-    } finally {
-      setLoadingColumns(false);
-    }
-  };
-
-  useEffect(() => {
-    if (job?.status?.toLowerCase() === 'awaiting_mapping') {
-      fetchStagingColumns();
-    }
-  }, [job?.status, jobId]);
 
   // data_quality_issues cuando el job está terminado/analizado y hubo filas con error
   useEffect(() => {
@@ -260,268 +211,6 @@ export default function IngestionJobPage() {
   const isProcessing = job?.status && 
     !['completed', 'error', 'failed'].includes(job.status.toLowerCase());
 
-  // Get dataset type from job
-  const datasetType = job?.dataset_type || null;
-
-  // Get target fields based on dataset type
-  const getTargetFields = (type: string | null): string[] => {
-    if (!type) return [];
-    
-    const typeLower = type.toLowerCase();
-    
-    if (typeLower === 'shutdowns') {
-      return [
-        'company_id',
-        'site_id',
-        'asset_area',
-        'start_date',
-        'end_date',
-        'criticality',
-      ];
-    } else if (typeLower === 'needs') {
-      return [
-        'company_id',
-        'site_id',
-        'shutdown_id',
-        'item_name',
-        'item_category',
-        'specs',
-        'quantity',
-        'uom',
-        'required_by_date',
-        'lead_time_days',
-      ];
-    } else if (typeLower === 'suppliers') {
-      return [
-        'supplier_name',
-        'country',
-        'is_national',
-        'categories_json',
-        'coverage_json',
-        'verification_status',
-        'quality_score',
-        'sla_score',
-      ];
-    }
-    
-    return [];
-  };
-
-  // Required fields based on dataset type
-  const getRequiredFields = (type: string | null): string[] => {
-    if (!type) return [];
-    
-    const typeLower = type.toLowerCase();
-    
-    if (typeLower === 'shutdowns') {
-      return ['company_id', 'start_date', 'end_date'];
-    } else if (typeLower === 'needs') {
-      return ['company_id', 'item_name', 'item_category', 'quantity'];
-    } else if (typeLower === 'suppliers') {
-      return ['supplier_name'];
-    }
-    
-    return [];
-  };
-
-  const targetFields = getTargetFields(datasetType);
-  const requiredFields = getRequiredFields(datasetType);
-
-  /**
-   * Sugiere campo destino a partir del nombre de la columna origen (auto-match).
-   * Basado en docs01_DB_SCHEMA.md (needs, shutdowns, suppliers).
-   */
-  const suggestTargetField = (sourceColumn: string, type: string | null): string => {
-    const normalized = sourceColumn.trim().toLowerCase().replace(/\s+/g, '_');
-    const typeLower = (type ?? '').toLowerCase();
-
-    const needsMap: Record<string, string> = {
-      company_id: 'company_id',
-      company: 'company_id',
-      empresa: 'company_id',
-      site_id: 'site_id',
-      site: 'site_id',
-      sede: 'site_id',
-      shutdown_id: 'shutdown_id',
-      parada: 'shutdown_id',
-      item_name: 'item_name',
-      item: 'item_name',
-      nombre: 'item_name',
-      descripcion: 'item_name',
-      item_category: 'item_category',
-      category: 'item_category',
-      categoria: 'item_category',
-      specs: 'specs',
-      especificaciones: 'specs',
-      quantity: 'quantity',
-      cant: 'quantity',
-      cantidad: 'quantity',
-      qty: 'quantity',
-      uom: 'uom',
-      unit: 'uom',
-      unidad: 'uom',
-      required_by_date: 'required_by_date',
-      fecha_requerida: 'required_by_date',
-      lead_time_days: 'lead_time_days',
-      dias_entrega: 'lead_time_days',
-    };
-
-    const shutdownsMap: Record<string, string> = {
-      company_id: 'company_id',
-      company: 'company_id',
-      site_id: 'site_id',
-      site: 'site_id',
-      asset_area: 'asset_area',
-      area: 'asset_area',
-      start_date: 'start_date',
-      inicio: 'start_date',
-      end_date: 'end_date',
-      fin: 'end_date',
-      criticality: 'criticality',
-      criticidad: 'criticality',
-    };
-
-    const suppliersMap: Record<string, string> = {
-      supplier_name: 'supplier_name',
-      supplier: 'supplier_name',
-      proveedor: 'supplier_name',
-      country: 'country',
-      pais: 'country',
-      is_national: 'is_national',
-      nacional: 'is_national',
-      verification_status: 'verification_status',
-      quality_score: 'quality_score',
-      sla_score: 'sla_score',
-    };
-
-    const map = typeLower === 'shutdowns' ? shutdownsMap : typeLower === 'suppliers' ? suppliersMap : needsMap;
-    const allowed = new Set(getTargetFields(type));
-
-    if (map[normalized] && allowed.has(map[normalized])) return map[normalized];
-
-    for (const [key, target] of Object.entries(map)) {
-      if (allowed.has(target) && (normalized.includes(key) || key.includes(normalized))) return target;
-    }
-    return '';
-  };
-
-  const handleAutoMatch = () => {
-    const suggested: ColumnMapping = {};
-    stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType);
-      if (target) suggested[col.source_column] = target;
-    });
-    setColumnMapping((prev) => ({ ...suggested, ...prev }));
-    setMappingError(null);
-  };
-
-  // Auto-match al cargar columnas (sugerencias iniciales, una sola vez)
-  useEffect(() => {
-    if (autoMatchAppliedRef.current || stagingColumns.length === 0 || !datasetType) return;
-    autoMatchAppliedRef.current = true;
-    const suggested: ColumnMapping = {};
-    stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType);
-      if (target) suggested[col.source_column] = target;
-    });
-    if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
-  }, [stagingColumns, datasetType]);
-
-  // Validate mapping
-  const validateMapping = (): { valid: boolean; missingFields: string[] } => {
-    const missingFields: string[] = [];
-    
-    requiredFields.forEach((field) => {
-      const isMapped = Object.values(columnMapping).includes(field);
-      if (!isMapped) {
-        missingFields.push(field);
-      }
-    });
-
-    return {
-      valid: missingFields.length === 0,
-      missingFields,
-    };
-  };
-
-  // Handle mapping validation
-  const handleValidateMapping = () => {
-    const validation = validateMapping();
-    
-    if (validation.valid) {
-      setMappingError(null);
-      alert('✓ Mapeo válido. Todos los campos obligatorios están asignados.');
-    } else {
-      const missingList = validation.missingFields.join(', ');
-      setMappingError(`Faltan campos obligatorios: ${missingList}`);
-      alert(`⚠ Mapeo incompleto. Faltan campos obligatorios: ${missingList}`);
-    }
-  };
-
-  // Handle apply mapping
-  const handleApplyMapping = async () => {
-    if (!jobId) {
-      setMappingError('Job ID no encontrado');
-      return;
-    }
-
-    const validation = validateMapping();
-    if (!validation.valid) {
-      const missingList = validation.missingFields.join(', ');
-      setMappingError(`Faltan campos obligatorios: ${missingList}`);
-      alert(`⚠ No se puede aprobar. Faltan campos obligatorios: ${missingList}`);
-      return;
-    }
-
-    try {
-      setApplyingMapping(true);
-      setMappingError(null);
-      setMappingSuccess(false);
-
-      const response = await fetch('/api/workflows/mapping-apply', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          job_id: jobId,
-          mapping: columnMapping,
-          correlation_id: job?.correlation_id || null,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        const errorMessage = errorData.error || errorData.message || `Failed to apply mapping: ${response.statusText}`;
-        throw new Error(errorMessage);
-      }
-
-      setMappingSuccess(true);
-      
-      // Refresh job data after a short delay
-      setTimeout(() => {
-        fetchJob();
-      }, 1000);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to apply mapping';
-      setMappingError(errorMessage);
-      console.error('Error applying mapping:', err);
-      alert(`❌ Error al aplicar mapeo: ${errorMessage}`);
-    } finally {
-      setApplyingMapping(false);
-    }
-  };
-
-  // Toast notification helper
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    // Simple alert for now, can be enhanced with a toast library
-    if (type === 'success') {
-      alert(`✓ ${message}`);
-    } else {
-      alert(`❌ ${message}`);
-    }
-  };
-
   if (loading) {
     return (
       <div>
@@ -602,148 +291,8 @@ export default function IngestionJobPage() {
         </div>
       )}
 
-      {/* Mapping Panel - Only show when status is awaiting_mapping */}
       {job.status?.toLowerCase() === 'awaiting_mapping' && (
-        <SectionCard 
-          title="Mapeo de columnas (requerido)"
-          description="Asigna cada columna detectada a un campo destino del esquema"
-          className="mb-6 border-[#9aff8d]/30"
-        >
-          {loadingColumns ? (
-            <div className="text-center py-8">
-              <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[#9aff8d] mb-2"></div>
-              <p className="text-secondary text-sm">Cargando columnas detectadas...</p>
-            </div>
-          ) : errorColumns ? (
-            <div className="bg-red-900/20 border border-red-800 rounded-lg p-4">
-              <p className="text-red-300 text-sm">Error: {errorColumns}</p>
-            </div>
-          ) : stagingColumns.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-secondary">No se detectaron columnas. El archivo puede estar vacío o no procesado aún.</p>
-            </div>
-          ) : (
-            <>
-              {!datasetType && (
-                <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-4">
-                  <p className="text-yellow-300 text-sm">
-                    ⚠ No se pudo determinar el tipo de dataset. Algunas opciones pueden no estar disponibles.
-                  </p>
-                </div>
-              )}
-
-              {mappingError && (
-                <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 mb-4">
-                  <p className="text-red-300 text-sm font-medium mb-1">Qué falta para continuar:</p>
-                  <p className="text-red-200 text-sm">{mappingError}</p>
-                </div>
-              )}
-
-              {mappingSuccess && (
-                <div className="bg-green-900/20 border border-green-800 rounded-lg p-4 mb-4">
-                  <p className="text-green-300 text-sm">✓ Mapeo aplicado exitosamente. Refrescando estado del job...</p>
-                </div>
-              )}
-
-              <div className="overflow-x-auto mb-6">
-                <table className="w-full">
-                  <thead className="bg-zinc-900">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Columna Origen</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Campo Destino</th>
-                      <th className="px-4 py-3 text-left text-sm font-semibold text-zinc-300">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-700">
-                    {stagingColumns.map((col) => {
-                      const sourceCol = col.source_column;
-                      const mappedField = columnMapping[sourceCol] || '';
-                      const isRequired = requiredFields.includes(mappedField);
-                      const isMapped = !!mappedField;
-
-                      return (
-                        <tr key={sourceCol} className="hover:bg-zinc-700/50 transition-colors">
-                          <td className="px-4 py-3 text-sm text-zinc-300 font-mono">
-                            {sourceCol}
-                          </td>
-                          <td className="px-4 py-3">
-                            <select
-                              value={mappedField}
-                              onChange={(e) => {
-                                const newMapping = { ...columnMapping };
-                                if (e.target.value) {
-                                  newMapping[sourceCol] = e.target.value;
-                                } else {
-                                  delete newMapping[sourceCol];
-                                }
-                                setColumnMapping(newMapping);
-                                setMappingError(null);
-                              }}
-                              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d]"
-                            >
-                              <option value="">-- Sin asignar --</option>
-                              {targetFields.map((field) => (
-                                <option key={field} value={field}>
-                                  {field} {requiredFields.includes(field) ? '(requerido)' : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            {isMapped ? (
-                              <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
-                                isRequired
-                                  ? 'bg-green-900/30 text-green-400 border border-green-800'
-                                  : 'bg-blue-900/30 text-blue-400 border border-blue-800'
-                              }`}>
-                                {isRequired ? 'Asignado (requerido)' : 'Asignado'}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-zinc-700 text-zinc-300 border border-zinc-600">
-                                Sin asignar
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex items-center gap-4 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleAutoMatch}
-                  className="px-5 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded-md transition-colors font-medium"
-                >
-                  Auto-asignar sugerencias
-                </button>
-                <button
-                  onClick={handleValidateMapping}
-                  disabled={validatingMapping || Object.keys(columnMapping).length === 0}
-                  className="px-5 py-2.5 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-                >
-                  {validatingMapping ? 'Validando...' : 'Validar mapeo'}
-                </button>
-                <button
-                  onClick={handleApplyMapping}
-                  disabled={applyingMapping || Object.keys(columnMapping).length === 0}
-                  className="px-6 py-2.5 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
-                >
-                  {applyingMapping ? (
-                    <>
-                      <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[#232323] mr-2"></span>
-                      Aplicando...
-                    </>
-                  ) : (
-                    'Aprobar y continuar'
-                  )}
-                </button>
-              </div>
-            </>
-          )}
-        </SectionCard>
+        <IngestionMappingWorkflow jobId={jobId} initialJob={job} />
       )}
 
       {/* Card 1: Resumen del Job */}
