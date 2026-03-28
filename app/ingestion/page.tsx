@@ -8,6 +8,10 @@ import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
 import CopyButton from '../components/ui/CopyButton';
 import { publishMartsRefreshCompleted } from '@/lib/trazzosMartsBroadcast';
+import {
+  jsonDocumentToObjectRows,
+  unwrapCsvHeaderLineIfWholeLineQuoted,
+} from '@/lib/ingestionFileExtract';
 
 interface SessionResponse {
   [key: string]: any;
@@ -145,8 +149,10 @@ export default function IngestionPage() {
       if (ext === 'csv') {
         const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
         if (lines.length === 0) return null;
-        const delimiter = lines[0].includes(';') ? ';' : ',';
-        const headers = lines[0].split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
+        const headerLineRaw = lines[0];
+        const headerLine = unwrapCsvHeaderLineIfWholeLineQuoted(headerLineRaw);
+        const delimiter = headerLine.includes(';') ? ';' : ',';
+        const headers = headerLine.split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
         const rows: Record<string, unknown>[] = [];
         for (let i = 1; i < Math.min(4, lines.length); i++) {
           const values = lines[i].split(delimiter);
@@ -168,10 +174,9 @@ export default function IngestionPage() {
         return out.length ? out : null;
       }
       if (ext === 'json') {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) return parsed.slice(0, 3).filter((x) => x && typeof x === 'object') as Record<string, unknown>[];
-        if (parsed && typeof parsed === 'object') return [parsed as Record<string, unknown>];
-        return null;
+        const parsed = JSON.parse(text) as unknown;
+        const rows = jsonDocumentToObjectRows(parsed);
+        return rows.length ? rows.slice(0, 3) : null;
       }
     } catch (e) {
       console.warn('[extractSampleDataFromFile] Error leyendo archivo:', e);
@@ -190,8 +195,9 @@ export default function IngestionPage() {
       if (ext === 'csv') {
         const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
         if (lines.length < 2) return [];
-        const delimiter = lines[0].includes(';') ? ';' : ',';
-        const headers = lines[0].split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
+        const headerLine = unwrapCsvHeaderLineIfWholeLineQuoted(lines[0]);
+        const delimiter = headerLine.includes(';') ? ';' : ',';
+        const headers = headerLine.split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ''));
         const rows: Record<string, unknown>[] = [];
         for (let i = 1; i < lines.length; i++) {
           const values = lines[i].split(delimiter);
@@ -213,10 +219,8 @@ export default function IngestionPage() {
         return out;
       }
       if (ext === 'json') {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) return parsed.filter((x) => x && typeof x === 'object') as Record<string, unknown>[];
-        if (parsed && typeof parsed === 'object') return [parsed as Record<string, unknown>];
-        return [];
+        const parsed = JSON.parse(text) as unknown;
+        return jsonDocumentToObjectRows(parsed);
       }
     } catch (e) {
       console.warn('[extractAllRowsFromFile] Error leyendo archivo:', e);
@@ -280,15 +284,7 @@ export default function IngestionPage() {
       } catch {
         throw new Error('El archivo JSON no es válido');
       }
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          if (item && typeof item === 'object' && !Array.isArray(item)) {
-            rows.push(item as Record<string, unknown>);
-          }
-        }
-      } else if (parsed && typeof parsed === 'object') {
-        rows.push(parsed as Record<string, unknown>);
-      }
+      rows.push(...jsonDocumentToObjectRows(parsed));
     }
 
     if (rows.length === 0) {

@@ -434,7 +434,7 @@ export default function IngestionMappingWorkflow({
         ) : stagingColumns.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-secondary">
-              No se detectaron columnas. El archivo puede estar vacío o no procesado aún.
+              No se pudieron detectar columnas en el archivo. Por favor, verifica el formato
             </p>
           </div>
         ) : (
