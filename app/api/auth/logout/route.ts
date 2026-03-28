@@ -7,6 +7,7 @@ export async function POST(request: NextRequest) {
   response.cookies.delete('trazzos_auth');
   response.cookies.delete('trazzos_wallet');
   response.cookies.delete('trazzos_user');
+  response.cookies.delete('trazzos_user_email');
   response.cookies.delete('trazzos_auth_method');
   clearProfileSnapshotCookies(response);
 

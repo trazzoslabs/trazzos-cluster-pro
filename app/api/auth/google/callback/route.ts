@@ -133,7 +133,15 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 días
       path: '/',
     });
-    
+
+    response.cookies.set('trazzos_user_email', googleEmail, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7,
+      path: '/',
+    });
+
     response.cookies.set('trazzos_auth_method', 'google', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',

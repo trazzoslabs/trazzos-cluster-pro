@@ -21,24 +21,64 @@ const cookieBase = {
   path: '/',
 };
 
-export async function fetchPublicProfileByUserId(
+/** Mensaje legible cuando PostgREST/DB falla al leer `public.profiles` (service_role). */
+function profileQueryUserMessage(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('querying schema') ||
+    lower.includes('schema cache') ||
+    lower.includes('relation') && lower.includes('does not exist')
+  ) {
+    return (
+      'No se pudo consultar public.profiles en la base de datos. ' +
+      'Comprueba que la tabla existe, que el esquema está expuesto en Supabase y que ' +
+      'SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY coinciden con el mismo proyecto que NEXT_PUBLIC_SUPABASE_URL.'
+    );
+  }
+  return `Error al leer el perfil (public.profiles): ${raw}`;
+}
+
+export type FetchPublicProfileResult =
+  | { ok: true; profile: PublicProfileSnapshot | null }
+  | { ok: false; userMessage: string; rawMessage: string; code?: string };
+
+/**
+ * Lee `public.profiles` con el cliente service_role (sin depender de la sesión JWT del navegador).
+ */
+export async function fetchPublicProfileByUserIdWithResult(
   userId: string,
-): Promise<PublicProfileSnapshot | null> {
+): Promise<FetchPublicProfileResult> {
   const trimmed = userId?.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return { ok: true, profile: null };
+  }
 
   const { data, error } = await supabaseServer
+    .schema('public')
     .from('profiles')
     .select('user_id, company_id, role, status')
     .eq('user_id', trimmed)
     .maybeSingle();
 
   if (error) {
-    console.error('[publicProfiles] Error leyendo profiles por user_id:', error.message);
-    return null;
+    console.error('[publicProfiles] Error leyendo profiles por user_id:', error.message, error.code);
+    return {
+      ok: false,
+      userMessage: profileQueryUserMessage(error.message),
+      rawMessage: error.message,
+      code: error.code,
+    };
   }
 
-  return data as PublicProfileSnapshot | null;
+  return { ok: true, profile: data as PublicProfileSnapshot | null };
+}
+
+export async function fetchPublicProfileByUserId(
+  userId: string,
+): Promise<PublicProfileSnapshot | null> {
+  const r = await fetchPublicProfileByUserIdWithResult(userId);
+  if (!r.ok) return null;
+  return r.profile;
 }
 
 /** Resuelve `auth.users.id` por email (admin API; puede paginar en cuentas muy grandes). */

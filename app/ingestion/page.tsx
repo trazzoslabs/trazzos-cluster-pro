@@ -16,6 +16,36 @@ import {
 } from '@/lib/ingestionFileExtract';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
 
+/** Cookie no httpOnly establecida en set-session / Google callback. */
+function readDocumentCookie(name: string): string {
+  if (typeof document === 'undefined') return '';
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = document.cookie.match(new RegExp(`(?:^|; )${escaped}=([^;]*)`));
+  return m ? decodeURIComponent(m[1].trim()) : '';
+}
+
+async function resolveIngestionUserEmail(): Promise<string> {
+  const {
+    data: { user },
+  } = await supabaseClient.auth.getUser();
+  let email = (user?.email ?? '').trim();
+  if (!email) {
+    email = readDocumentCookie('trazzos_user_email').trim();
+  }
+  if (!email) {
+    try {
+      const res = await fetch('/api/auth/profile', { credentials: 'include' });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        email = String(body?.data?.email ?? '').trim();
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  return email;
+}
+
 interface SessionResponse {
   [key: string]: any;
 }
@@ -45,6 +75,8 @@ export default function IngestionPage() {
   const [companyId, setCompanyId] = useState<string>(FIXED_COMPANY_ID);
   const [userId, setUserId] = useState<string>(FIXED_USER_ID);
   const [userEmail, setUserEmail] = useState<string>('');
+  /** true solo si el email lo rellenamos desde getUser / cookie / perfil (campo bloqueado). */
+  const [emailIdentityLocked, setEmailIdentityLocked] = useState(false);
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -379,9 +411,39 @@ export default function IngestionPage() {
     return id;
   }, [jobId]);
 
-  // Load user profile on mount + restore persisted tracking IDs (solo job_id para estado; correlation_id no se usa para búsqueda)
+  // Identidad (email): Supabase getUser → cookie trazzos_user_email → /api/auth/profile
   useEffect(() => {
-    fetchUserProfile();
+    let cancelled = false;
+    const hydrateEmail = async () => {
+      setLoadingProfile(true);
+      try {
+        const email = await resolveIngestionUserEmail();
+        if (!cancelled && email) {
+          setUserEmail(email);
+          setEmailIdentityLocked(true);
+        }
+      } catch (e) {
+        console.warn('[ingestion] No se pudo resolver email:', e);
+      } finally {
+        if (!cancelled) setLoadingProfile(false);
+      }
+    };
+    void hydrateEmail();
+    const {
+      data: { subscription },
+    } = supabaseClient.auth.onAuthStateChange((event) => {
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+        void hydrateEmail();
+      }
+    });
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // Restore persisted tracking IDs (solo job_id para estado; correlation_id no se usa para búsqueda)
+  useEffect(() => {
     fetchRecentJobs();
 
     try {
@@ -419,32 +481,6 @@ export default function IngestionPage() {
       window.history.replaceState(null, '', path);
     }
   }, []);
-
-  const fetchUserProfile = async () => {
-    try {
-      setLoadingProfile(true);
-
-      const response = await fetch('/api/auth/profile');
-      
-      if (!response.ok) {
-        // No bloquear la página si el perfil falla; los IDs fijos son suficientes
-        console.warn('[fetchUserProfile] Perfil no disponible (status %d). Usando IDs fijos.', response.status);
-        return;
-      }
-
-      const result = await response.json();
-      const profile = result.data;
-
-      if (profile) {
-        setUserEmail(profile.email || '');
-      }
-    } catch (err) {
-      // Silencioso: los IDs fijos ya están configurados, el email es opcional
-      console.warn('[fetchUserProfile] No se pudo cargar el perfil, usando IDs fijos:', err);
-    } finally {
-      setLoadingProfile(false);
-    }
-  };
 
   // Listado de jobs: API usa job_id cuando se consulta uno; aquí traemos todos. Sin correlation_id como llave.
   const fetchRecentJobs = async () => {
@@ -1454,13 +1490,31 @@ export default function IngestionPage() {
             <input
               type="email"
               value={userEmail}
-              disabled
-              readOnly
-              placeholder={loadingProfile ? 'Cargando...' : 'user@example.com'}
-              className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
+              onChange={(e) => setUserEmail(e.target.value)}
+              disabled={loadingProfile || emailIdentityLocked}
+              readOnly={loadingProfile || emailIdentityLocked}
+              placeholder={
+                loadingProfile
+                  ? 'Cargando identidad...'
+                  : emailIdentityLocked
+                    ? ''
+                    : 'Introduce el email con el que iniciaste sesión'
+              }
+              className={`w-full px-4 py-2 border border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d] ${
+                loadingProfile || emailIdentityLocked
+                  ? 'bg-zinc-900 text-zinc-300 cursor-not-allowed'
+                  : 'bg-zinc-800 text-white'
+              }`}
             />
-            {userEmail && (
-              <p className="mt-1 text-xs text-zinc-500">Obtenido automáticamente de tu perfil</p>
+            {emailIdentityLocked && userEmail.trim() && !loadingProfile && (
+              <p className="mt-1 text-xs text-zinc-500">
+                Bloqueado con el email detectado (sesión Supabase o cookie de acceso).
+              </p>
+            )}
+            {!loadingProfile && !emailIdentityLocked && !userEmail.trim() && (
+              <p className="mt-1 text-xs text-amber-600/90">
+                No se detectó email en la sesión. Usa el mismo email con el que iniciaste sesión.
+              </p>
             )}
           </div>
         </div>

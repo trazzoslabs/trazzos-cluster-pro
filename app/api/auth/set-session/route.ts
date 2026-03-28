@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   attachProfileSnapshotCookies,
-  fetchPublicProfileByUserId,
+  fetchPublicProfileByUserIdWithResult,
   findAuthUserIdByEmail,
+  type PublicProfileSnapshot,
 } from '../../_lib/publicProfiles';
 
 /**
  * POST /api/auth/set-session
  * Establece cookies de sesión tras login Supabase y sincroniza snapshot desde `public.profiles` (PK user_id).
+ * Las lecturas a `public.profiles` usan SUPABASE_SERVICE_ROLE_KEY (no la sesión anónima del cliente).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -24,7 +26,22 @@ export async function POST(request: NextRequest) {
       resolvedUserId = await findAuthUserIdByEmail(email);
     }
 
-    const profile = resolvedUserId ? await fetchPublicProfileByUserId(resolvedUserId) : null;
+    let profile: PublicProfileSnapshot | null = null;
+
+    if (resolvedUserId) {
+      const profileResult = await fetchPublicProfileByUserIdWithResult(resolvedUserId);
+      if (!profileResult.ok) {
+        return NextResponse.json(
+          {
+            error: profileResult.userMessage,
+            code: profileResult.code ?? null,
+            details: profileResult.rawMessage,
+          },
+          { status: 503 },
+        );
+      }
+      profile = profileResult.profile;
+    }
 
     const response = NextResponse.json(
       {
@@ -48,6 +65,15 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set('trazzos_user', email.trim(), {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7,
+      path: '/',
+    });
+
+    // Legible en el cliente (p. ej. ingestion) como respaldo si getUser() aún no expone email
+    response.cookies.set('trazzos_user_email', email.trim(), {
+      httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7,

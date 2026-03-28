@@ -162,6 +162,7 @@ function LoginPageContent() {
         // Establecer cookies para compatibilidad con el middleware
         const response = await fetch('/api/auth/set-session', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email: data.user.email,
@@ -170,26 +171,30 @@ function LoginPageContent() {
         });
 
         const sessionPayload = (await response.json().catch(() => ({}))) as {
+          error?: string;
           company_id?: string | null;
           role?: string | null;
           user_id?: string | null;
         };
 
         if (!response.ok) {
-          console.warn('Failed to set session cookies, but auth was successful', sessionPayload);
-        } else {
-          console.log(
-            '[Login] Inicio de sesión OK — company_id desde public.profiles:',
-            sessionPayload.company_id ?? '(sin fila o null)',
-            '| user_id:',
-            sessionPayload.user_id ?? '(null)',
-            '| role:',
-            sessionPayload.role ?? '(null)',
-          );
+          const msg =
+            sessionPayload.error ||
+            'No se pudieron guardar las cookies de sesión. Revisa la conexión a la base de datos.';
+          showToast(msg, 'error');
+          return;
         }
 
+        console.log(
+          '[Login] Inicio de sesión OK — company_id desde public.profiles:',
+          sessionPayload.company_id ?? '(sin fila o null)',
+          '| user_id:',
+          sessionPayload.user_id ?? '(null)',
+          '| role:',
+          sessionPayload.role ?? '(null)',
+        );
+
         setIsAuthenticated(true);
-        // Redirigir a /ingestion como se solicitó
         router.push('/ingestion');
       } else {
         throw new Error('No se recibió sesión del servidor');
