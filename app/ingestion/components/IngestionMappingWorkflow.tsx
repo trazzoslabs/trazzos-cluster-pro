@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import {
+  extractHeaders,
+  trazzosMappingSourceColumnsStorageKey,
+} from '@/lib/ingestionFileExtract';
 import SectionCard from '../../components/ui/SectionCard';
 
 export interface IngestionJobMappingSnapshot {
@@ -152,6 +156,8 @@ type Props = {
   jobId: string;
   /** Si el padre ya cargó el job (p. ej. página /ingestion/jobs/[id]), evita un fetch inicial duplicado. */
   initialJob?: IngestionJobMappingSnapshot | null;
+  /** Archivo recién subido en el padre: prioridad sobre API staging-columns. */
+  sourceFile?: File | null;
   /** Enlace opcional arriba del bloque (ruta /ingestion/mapping/...). */
   showBackToJobsLink?: boolean;
 };
@@ -159,6 +165,7 @@ type Props = {
 export default function IngestionMappingWorkflow({
   jobId,
   initialJob,
+  sourceFile = null,
   showBackToJobsLink,
 }: Props) {
   const router = useRouter();
@@ -167,7 +174,9 @@ export default function IngestionMappingWorkflow({
   const [loadingJob, setLoadingJob] = useState(!initialJob);
 
   const [stagingColumns, setStagingColumns] = useState<StagingColumn[]>([]);
+  /** Carga solo del API staging-columns (no bloquea la UI si ya hay columnas locales). */
   const [loadingColumns, setLoadingColumns] = useState(false);
+  const [localExtracting, setLocalExtracting] = useState(false);
   const [errorColumns, setErrorColumns] = useState<string | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
   const [applyingMapping, setApplyingMapping] = useState(false);
@@ -211,27 +220,89 @@ export default function IngestionMappingWorkflow({
     fetchJobLocal();
   }, [jobId]);
 
-  const fetchStagingColumns = async () => {
-    if (!jobId) return;
-    try {
-      setLoadingColumns(true);
-      setErrorColumns(null);
-      const response = await fetch(`/api/data/staging-columns?job_id=${encodeURIComponent(jobId)}`);
-      if (!response.ok) throw new Error(`Error ${response.status}`);
-      const result = await response.json();
-      setStagingColumns(result.data || []);
-    } catch (err) {
-      setErrorColumns(err instanceof Error ? err.message : 'Error cargando columnas');
-    } finally {
-      setLoadingColumns(false);
-    }
-  };
+  useEffect(() => {
+    autoMatchAppliedRef.current = false;
+    setStagingColumns([]);
+    setColumnMapping({});
+    setErrorColumns(null);
+    setLocalExtracting(false);
+    setLoadingColumns(false);
+  }, [jobId]);
 
   useEffect(() => {
-    if (job?.status?.toLowerCase() === 'awaiting_mapping') {
-      fetchStagingColumns();
-    }
-  }, [job?.status, jobId]);
+    if (job?.status?.toLowerCase() !== 'awaiting_mapping' || !jobId) return;
+
+    let cancelled = false;
+    const storageKey = trazzosMappingSourceColumnsStorageKey(jobId);
+
+    const toStaging = (names: string[]): StagingColumn[] => {
+      const detected_at = new Date().toISOString();
+      return names.map((source_column) => ({ source_column, detected_at }));
+    };
+
+    const applyLocalColumnNames = (names: string[] | null | undefined): boolean => {
+      if (cancelled || !names?.length) return false;
+      setStagingColumns(toStaging(names));
+      setErrorColumns(null);
+      return true;
+    };
+
+    (async () => {
+      setErrorColumns(null);
+      let haveLocalColumns = false;
+
+      if (sourceFile) {
+        setLocalExtracting(true);
+        try {
+          const names = await extractHeaders(sourceFile);
+          if (!cancelled && applyLocalColumnNames(names)) {
+            haveLocalColumns = true;
+            setLoadingColumns(false);
+          }
+        } finally {
+          if (!cancelled) setLocalExtracting(false);
+        }
+      }
+
+      if (!cancelled && !haveLocalColumns && typeof window !== 'undefined') {
+        try {
+          const raw = sessionStorage.getItem(storageKey);
+          if (raw) {
+            const parsed = JSON.parse(raw) as unknown;
+            if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+              if (applyLocalColumnNames(parsed as string[])) {
+                haveLocalColumns = true;
+                setLoadingColumns(false);
+              }
+            }
+          }
+        } catch {
+          /* session inválida */
+        }
+      }
+
+      if (!haveLocalColumns) setLoadingColumns(true);
+      try {
+        const response = await fetch(`/api/data/staging-columns?job_id=${encodeURIComponent(jobId)}`);
+        if (!response.ok) throw new Error(`Error ${response.status}`);
+        const result = await response.json();
+        const serverCols: StagingColumn[] = result.data || [];
+        if (!cancelled && serverCols.length > 0) {
+          setStagingColumns((prev) => (prev.length > 0 ? prev : serverCols));
+        }
+      } catch (err) {
+        if (!cancelled && !haveLocalColumns) {
+          setErrorColumns(err instanceof Error ? err.message : 'Error cargando columnas');
+        }
+      } finally {
+        if (!cancelled) setLoadingColumns(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [job?.status, jobId, sourceFile]);
 
   const datasetType = job?.dataset_type || null;
   const targetFields = getTargetFields(datasetType);
@@ -335,6 +406,13 @@ export default function IngestionMappingWorkflow({
         throw new Error(errorMessage);
       }
 
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem(trazzosMappingSourceColumnsStorageKey(jobId));
+        } catch {
+          /* noop */
+        }
+      }
       router.push('/ingestion?success=mapping_applied');
     } catch (err) {
       const errorMessage = mapApplyErrorToUserMessage(
@@ -422,7 +500,7 @@ export default function IngestionMappingWorkflow({
         description="Asigna cada columna detectada a un campo destino del esquema"
         className="mb-6 border-[#9aff8d]/30"
       >
-        {loadingColumns ? (
+        {stagingColumns.length === 0 && (localExtracting || loadingColumns) ? (
           <div className="py-8 text-center">
             <div className="mb-2 inline-block h-6 w-6 animate-spin rounded-full border-2 border-[#9aff8d] border-t-transparent" />
             <p className="text-secondary text-sm">Cargando columnas detectadas...</p>

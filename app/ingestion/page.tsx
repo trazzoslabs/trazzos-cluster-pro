@@ -9,7 +9,9 @@ import StatusBadge from '../components/ui/StatusBadge';
 import CopyButton from '../components/ui/CopyButton';
 import { publishMartsRefreshCompleted } from '@/lib/trazzosMartsBroadcast';
 import {
+  extractHeaders,
   jsonDocumentToObjectRows,
+  trazzosMappingSourceColumnsStorageKey,
   unwrapCsvHeaderLineIfWholeLineQuoted,
 } from '@/lib/ingestionFileExtract';
 
@@ -44,6 +46,10 @@ export default function IngestionPage() {
   const [userEmail, setUserEmail] = useState<string>('');
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
+  const fileRef = useRef<File | null>(null);
+  useEffect(() => {
+    fileRef.current = file;
+  }, [file]);
   const [previewData, setPreviewData] = useState<Record<string, unknown>[]>([]);
   const [datasetType, setDatasetType] = useState<DatasetType>('needs');
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
@@ -512,6 +518,21 @@ export default function IngestionPage() {
     setCompletionToast('Mapeo de columnas requerido');
     setTimeout(() => setCompletionToast(null), 10_000);
     fetchRecentJobs();
+    void (async () => {
+      const f = fileRef.current;
+      if (!f || typeof window === 'undefined') return;
+      try {
+        const headers = await extractHeaders(f);
+        if (headers?.length) {
+          sessionStorage.setItem(
+            trazzosMappingSourceColumnsStorageKey(targetJobId),
+            JSON.stringify(headers),
+          );
+        }
+      } catch (e) {
+        console.warn('[runAwaitingMappingLogic] extractHeaders:', e);
+      }
+    })();
   }, []);
 
   // Polling de estado: solo job_id identifica cada job. correlation_id no se usa para búsqueda (evita 'undefined' si el flujo se reinició).

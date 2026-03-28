@@ -15,6 +15,58 @@ export function unwrapCsvHeaderLineIfWholeLineQuoted(line: string): string {
   return inner;
 }
 
+/** Clave sessionStorage para cabeceras extraídas en el cliente tras la subida (mismo job). */
+export function trazzosMappingSourceColumnsStorageKey(jobId: string): string {
+  return `trazzos_mapping_source_columns:${jobId}`;
+}
+
+/**
+ * Nombres de columna del archivo (CSV / JSON / JSONL), para mapeo sin depender del staging en DB.
+ * La línea de cabecera CSV pasa por unwrapCsvHeaderLineIfWholeLineQuoted antes del split.
+ */
+export async function extractHeaders(file: File): Promise<string[] | null> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  try {
+    const text = await file.text();
+    if (ext === 'csv') {
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length === 0) return null;
+      const headerLine = unwrapCsvHeaderLineIfWholeLineQuoted(lines[0]);
+      const delimiter = headerLine.includes(';') ? ';' : ',';
+      const headers = headerLine
+        .split(delimiter)
+        .map((h) => h.trim().replace(/^"|"$/g, ''))
+        .filter((h) => h.length > 0);
+      return headers.length ? headers : null;
+    }
+    if (ext === 'jsonl') {
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const parsed = JSON.parse(lines[i]) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const keys = Object.keys(parsed as Record<string, unknown>);
+            return keys.length ? keys : null;
+          }
+        } catch {
+          /* siguiente línea */
+        }
+      }
+      return null;
+    }
+    if (ext === 'json') {
+      const parsed = JSON.parse(text) as unknown;
+      const rows = jsonDocumentToObjectRows(parsed);
+      if (rows.length === 0) return null;
+      const keys = Object.keys(rows[0]);
+      return keys.length ? keys : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function isPlainObjectRecord(x: unknown): x is Record<string, unknown> {
   return Boolean(x) && typeof x === 'object' && !Array.isArray(x);
 }
