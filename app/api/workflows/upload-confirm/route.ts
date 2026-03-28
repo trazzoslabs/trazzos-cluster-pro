@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Invalid JSON in request body', 400);
     }
 
-    const { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId, dataset_type: rawDatasetTypeFromBody } = (body ?? {}) as Record<string, unknown>;
+    const { job_id: rawJobId, correlation_id: rawCorrelationId, upload_id: rawUploadId } = (body ?? {}) as Record<string, unknown>;
     const rawUploadIdResolved = rawUploadId ?? (body?.uploadId as string | undefined);
     const jobId = typeof rawJobId === 'string' ? rawJobId.trim() : String(rawJobId ?? '').trim();
     const correlationIdValue = typeof rawCorrelationId === 'string' ? rawCorrelationId.trim() : String(rawCorrelationId ?? '').trim();
@@ -65,39 +65,39 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('upload_id debe ser un UUID válido', 400);
     }
 
+    if (!isValidUUID(jobId)) {
+      console.error('[upload-confirm] 400: job_id no es un UUID válido', { received: jobId });
+      return createErrorResponse('job_id debe ser un UUID válido', 400);
+    }
+
     if (jobId === 'undefined') {
       console.error('[upload-confirm] 400: job_id es la cadena literal "undefined"');
       return createErrorResponse('job_id no puede ser la cadena literal "undefined"', 400);
     }
 
     const rawUserEmail = body?.user_email ?? body?.userEmail;
-    const rawAppUrl = body?.app_url ?? body?.appUrl;
-    const rawCompanyId = body?.company_id ?? body?.companyId;
-    const rawUserId = body?.user_id ?? body?.userId;
-    const rawDatasetType = rawDatasetTypeFromBody ?? body?.datasetType;
-    const companyId = typeof rawCompanyId === 'string' ? rawCompanyId.trim() : '';
-    const user_email = typeof rawUserEmail === 'string' ? rawUserEmail.trim() : '';
-    const app_url = typeof rawAppUrl === 'string' ? rawAppUrl.trim() : '';
-    const dataset_type = typeof rawDatasetType === 'string' ? rawDatasetType.trim() : '';
+    const user_email =
+      typeof rawUserEmail === 'string' ? rawUserEmail.trim() : String(rawUserEmail ?? '').trim();
 
-    if (isInvalidTrackingValue(dataset_type)) {
-      console.error('[upload-confirm] 400: dataset_type vacío', { received: rawDatasetType });
-      return createErrorResponse('Dataset type missing', 400);
+    if (isInvalidTrackingValue(user_email)) {
+      console.error('[upload-confirm] 400: user_email faltante');
+      return createErrorResponse('user_email del perfil es requerido (V2-03)', 400);
     }
 
-    const effectiveAppUrl = app_url || 'https://trazzos-cluster-pro.vercel.app';
-    const userId = typeof rawUserId === 'string' ? rawUserId.trim() : 'bff82884-0263-4bc1-8895-3567c2c02b55';
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user_email);
+    if (!emailOk) {
+      return createErrorResponse('user_email debe ser un correo válido', 400);
+    }
 
-    // Solo metadatos: n8n descarga el archivo desde Supabase Storage
+    /**
+     * V2-02 / V2-03: cuerpo JSON hacia n8n solo con estos cuatro campos.
+     * Dataset, company, app_url, etc. los resuelve el flujo en n8n/DB a partir de upload_id/job_id.
+     */
     const finalPayload = {
-      upload_id: uploadIdValue,
-      user_id: userId || 'bff82884-0263-4bc1-8895-3567c2c02b55',
-      company_id: companyId || 'aaaa1111-1111-4111-a111-111111111111',
-      dataset_type: dataset_type,
-      user_email: user_email,
-      app_url: effectiveAppUrl,
-      correlation_id: correlationIdValue,
       job_id: jobId,
+      upload_id: uploadIdValue,
+      correlation_id: correlationIdValue,
+      user_email,
     };
     const correlationId = correlationIdValue;
 

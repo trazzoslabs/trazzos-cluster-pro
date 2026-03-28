@@ -306,6 +306,7 @@ export default function IngestionPage() {
   const realtimeChannelRef = useRef<ReturnType<typeof supabaseClient.channel> | null>(null);
   const autoCompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionResponseRef = useRef<SessionResponse | null>(null);
+  /** job_id canónico V2-01: misma referencia para confirm (V2-03) y polling; no depende solo del estado async. */
   const jobIdRef = useRef<string | null>(null);
   const sampleDataRef = useRef<Record<string, unknown>[] | null>(null);
   const fileRowsRef = useRef<Record<string, unknown>[] | null>(null);
@@ -455,10 +456,6 @@ export default function IngestionPage() {
     setUploadPhase('idle');
     setLoadingSession(false);
     setLoadingConfirm(false);
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
     if (autoCompleteTimeoutRef.current) {
       clearTimeout(autoCompleteTimeoutRef.current);
       autoCompleteTimeoutRef.current = null;
@@ -479,6 +476,18 @@ export default function IngestionPage() {
         const result = await response.json();
         const jobs: IngestionJob[] = (result.data || []).slice(0, 10);
         const tracked = getTrackedJobId();
+
+        const trackedJobRow = tracked ? jobs.find((j) => j.job_id === tracked) : undefined;
+        if (trackedJobRow?.status?.toLowerCase() === 'awaiting_mapping') {
+          if (autoCompleteTimeoutRef.current) {
+            clearTimeout(autoCompleteTimeoutRef.current);
+            autoCompleteTimeoutRef.current = null;
+          }
+          setUploadPhase('idle');
+          setLoadingSession(false);
+          setLoadingConfirm(false);
+          setAwaitingMappingJobId(tracked!);
+        }
 
         jobs.forEach(job => {
           const prev = prevJobStatusRef.current.get(job.job_id);
@@ -672,8 +681,9 @@ export default function IngestionPage() {
       formData.append('dataset_type', detectedType);
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
-      // Respaldo inmediato: persistir job_id justo después de crearlo.
+      // Respaldo inmediato: persistir job_id y ref (V2-01 = misma id en confirm/polling).
       persistTrackingIds({ jobId: generatedJobId });
+      jobIdRef.current = generatedJobId;
       setJobId(generatedJobId);
 
       console.log('[handleCreateSession] Enviando request multipart a /api/workflows/upload-session:', {
@@ -927,18 +937,25 @@ export default function IngestionPage() {
     }
 
     const ids = extractIds(effectiveSession);
-    const canonicalJobId = sessionSnapshot ? ids.jobId : (ids.jobId ?? jobIdRef.current ?? jobId ?? localStorage.getItem('trazzos_tracked_job_id') ?? createClientJobId());
+    const canonicalJobId = (
+      jobIdRef.current ||
+      ids.jobId ||
+      jobId ||
+      (typeof window !== 'undefined' ? localStorage.getItem('trazzos_tracked_job_id') : null)
+    )?.toString().trim() || '';
+
     const canonicalUploadId = sessionSnapshot ? ids.uploadId : (ids.uploadId ?? localStorage.getItem('trazzos_tracked_upload_id'));
     const canonicalCorrelationId = sessionSnapshot ? ids.correlationId : (ids.correlationId ?? correlationId ?? localStorage.getItem('trazzos_tracked_correlation_id'));
+
+    if (isInvalidTrackingId(canonicalJobId)) {
+      setErrorConfirm('El job_id de la sesión V2-01 no está disponible. Vuelve a crear la sesión.');
+      setGlobalError('Error: job_id ausente. Reinicia la carga.');
+      return;
+    }
 
     if (isInvalidTrackingId(canonicalUploadId)) {
       setErrorConfirm('El ID de carga no es válido.');
       setGlobalError('Error: El ID de carga (upload_id) no es válido o está vacío.');
-      return;
-    }
-    if (isInvalidTrackingId(canonicalJobId)) {
-      setErrorConfirm('El job_id no es válido.');
-      setGlobalError('Error: job_id no es válido o está vacío.');
       return;
     }
     if (isInvalidTrackingId(canonicalCorrelationId)) {
@@ -951,6 +968,7 @@ export default function IngestionPage() {
     const jobIdStr = String(canonicalJobId).trim();
     const correlationIdStr = String(canonicalCorrelationId).trim();
 
+    jobIdRef.current = jobIdStr;
     persistTrackingIds({ jobId: jobIdStr, uploadId: uploadIdStr, correlationId: correlationIdStr });
 
     console.log('[handleConfirm] IDs usados (desde sesión):', { jobId: jobIdStr, uploadId: uploadIdStr, correlationId: correlationIdStr });
@@ -960,22 +978,15 @@ export default function IngestionPage() {
       setErrorConfirm(null);
       setSuccessConfirm(false);
 
-      const effectiveAppUrl = typeof window !== 'undefined' && window.location?.origin
-        ? `${window.location.origin}/ingestion`
-        : (appUrl?.trim() || '');
       const payload = {
-        upload_id: uploadIdStr,
         job_id: jobIdStr,
+        upload_id: uploadIdStr,
         correlation_id: correlationIdStr,
-        company_id: companyId,
-        dataset_type: datasetType,
-        cluster_id: FIXED_CLUSTER_ID,
         user_email: effectiveEmail,
-        app_url: effectiveAppUrl || undefined,
       };
 
       const payloadJson = JSON.stringify(payload);
-      console.log('[handleConfirm] JSON exacto que se enviará a /api/workflows/upload-confirm (y luego a n8n):', payloadJson);
+      console.log('[handleConfirm] V2-03 payload (solo 4 campos hacia n8n):', payloadJson);
 
       let dispatched = false;
 
@@ -990,7 +1001,7 @@ export default function IngestionPage() {
 
         console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
         if (response.ok) {
-          console.log('[V6 trigger ACK] upload-confirm respondió OK (200-299) para job_id=%s cluster_id=%s', payload.job_id, payload.cluster_id);
+          console.log('[V6 trigger ACK] upload-confirm OK job_id=%s', payload.job_id);
           try {
             const bc = new BroadcastChannel('trazzos_marts');
             bc.postMessage({ type: 'n8n_v2_ok', ts: Date.now(), job_id: payload.job_id });
@@ -1179,17 +1190,13 @@ export default function IngestionPage() {
         console.error('ERROR: Faltan IDs de seguimiento', { confirmJobId, confirmCorrelationId, confirmUploadId });
         throw new Error('Faltan job_id, correlation_id o upload_id para confirmar');
       }
-      const confirmAppUrl = typeof window !== 'undefined' && window.location?.origin ? `${window.location.origin}/ingestion` : (appUrl?.trim() || '');
       const confirmPayload = {
         job_id: confirmJobId,
-        correlation_id: confirmCorrelationId,
         upload_id: confirmUploadId,
-        company_id: companyId,
-        dataset_type: datasetType,
+        correlation_id: confirmCorrelationId,
         user_email: confirmEmail,
-        app_url: confirmAppUrl || undefined,
       };
-      console.log('[handleUpload] JSON enviado a upload-confirm (solo metadatos, n8n descarga desde Supabase)');
+      console.log('[handleUpload] upload-confirm V2-03 (4 campos, mismo job_id que sesión/ref)');
       const confirmResponse = await fetch('/api/workflows/upload-confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1379,16 +1386,19 @@ export default function IngestionPage() {
         )}
 
         {awaitingMappingJobId && (
-          <div className="mb-6 rounded-xl border-2 border-[#9aff8d]/60 bg-[#9aff8d]/10 p-6 shadow-lg shadow-[#9aff8d]/10">
-            <p className="text-white font-semibold text-lg mb-1">Mapeo de columnas requerido</p>
-            <p className="text-zinc-300 text-sm mb-4">
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border-2 border-amber-500/70 bg-amber-950/40 p-6 shadow-lg shadow-amber-900/20"
+          >
+            <p className="text-amber-100 font-semibold text-lg mb-1">Mapeo de columnas requerido</p>
+            <p className="text-amber-200/90 text-sm mb-4">
               El pipeline detuvo la carga en este job hasta que definas el mapeo. Continúa en la pantalla de configuración.
             </p>
             <Link
               href={`/ingestion/mapping/${awaitingMappingJobId}`}
-              className="inline-flex w-full sm:w-auto justify-center items-center px-8 py-4 rounded-lg bg-[#9aff8d] hover:bg-[#9aff8d]/90 text-[#232323] font-bold text-base transition-colors shadow-md"
+              className="inline-flex w-full sm:w-auto justify-center items-center px-8 py-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-amber-950 font-bold text-base transition-colors shadow-md"
             >
-              Configurar Mapeo
+              Configurar Mapeo Requerido
             </Link>
           </div>
         )}
@@ -1565,7 +1575,7 @@ export default function IngestionPage() {
                       href={`/ingestion/mapping/${job.job_id}`}
                       className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-md transition-colors font-medium text-sm"
                     >
-                      Configurar Mapeo
+                      Configurar Mapeo Requerido
                     </Link>
                   </div>
                 ))}
