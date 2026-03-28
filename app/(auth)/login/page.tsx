@@ -98,6 +98,14 @@ function LoginPageContent() {
         throw new Error(errorData.error || 'Error al verificar firma');
       }
 
+      const verifyPayload = await response.json().catch(() => ({} as Record<string, unknown>));
+      console.log(
+        '[Login] Wallet OK — company_id desde public.profiles:',
+        (verifyPayload as { company_id?: string | null }).company_id ?? '(sin fila o null)',
+        '| role:',
+        (verifyPayload as { role?: string | null }).role ?? '(null)',
+      );
+
       setWalletAddress(address);
       setIsAuthenticated(true);
       const next = searchParams.get('next') || '/';
@@ -161,8 +169,23 @@ function LoginPageContent() {
           }),
         });
 
+        const sessionPayload = (await response.json().catch(() => ({}))) as {
+          company_id?: string | null;
+          role?: string | null;
+          user_id?: string | null;
+        };
+
         if (!response.ok) {
-          console.warn('Failed to set session cookies, but auth was successful');
+          console.warn('Failed to set session cookies, but auth was successful', sessionPayload);
+        } else {
+          console.log(
+            '[Login] Inicio de sesión OK — company_id desde public.profiles:',
+            sessionPayload.company_id ?? '(sin fila o null)',
+            '| user_id:',
+            sessionPayload.user_id ?? '(null)',
+            '| role:',
+            sessionPayload.role ?? '(null)',
+          );
         }
 
         setIsAuthenticated(true);

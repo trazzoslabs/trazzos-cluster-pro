@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  attachProfileSnapshotCookies,
+  fetchPublicProfileByUserId,
+  findAuthUserIdByEmail,
+} from '../../../_lib/publicProfiles';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -39,7 +44,7 @@ export async function GET(request: NextRequest) {
     // Modo demo: autenticación simple sin verificar con Google
     // En producción, esto debería intercambiar el código por un token
     const response = NextResponse.redirect(new URL(next, request.nextUrl.origin));
-    
+
     // Establecer cookies de autenticación (modo demo)
     response.cookies.set('trazzos_auth', 'ok', {
       httpOnly: true,
@@ -64,6 +69,8 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 días
       path: '/',
     });
+
+    attachProfileSnapshotCookies(response, null);
 
     return response;
   }
@@ -103,8 +110,11 @@ export async function GET(request: NextRequest) {
     }
 
     const userInfo = await userResponse.json();
+    const googleEmail =
+      typeof userInfo.email === 'string' ? userInfo.email : String(userInfo.id || 'google-user');
+    const authUserId = await findAuthUserIdByEmail(googleEmail);
+    const profile = authUserId ? await fetchPublicProfileByUserId(authUserId) : null;
 
-    // Crear respuesta con redirección
     const response = NextResponse.redirect(new URL(next, request.nextUrl.origin));
 
     // Establecer cookies httpOnly
@@ -116,7 +126,7 @@ export async function GET(request: NextRequest) {
       path: '/',
     });
 
-    response.cookies.set('trazzos_user', userInfo.email || userInfo.id || 'google-user', {
+    response.cookies.set('trazzos_user', googleEmail, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -131,6 +141,18 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 días
       path: '/',
     });
+
+    if (authUserId) {
+      response.cookies.set('trazzos_user_id', authUserId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        path: '/',
+      });
+    }
+
+    attachProfileSnapshotCookies(response, profile);
 
     return response;
   } catch (error) {

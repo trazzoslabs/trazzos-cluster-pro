@@ -8,9 +8,9 @@ import { resolveAuthenticatedProfile } from '../../_lib/resolveAuthenticatedProf
  * Retorna: user_id, company_id, email (si está disponible)
  *
  * Estrategia de búsqueda (en resolveAuthenticatedProfile):
- * 1. Para wallet: busca en auth.users por user_metadata.wallet_address o wallet
- * 2. Para email: busca en auth.users por email
- * 3. Luego busca el perfil en la tabla profiles usando el user_id encontrado
+ * 1. Para wallet: busca en Supabase Auth (`auth.users`) por user_metadata.wallet_address o wallet
+ * 2. Para email: busca en `auth.users` por email
+ * 3. Luego lee `public.profiles` por `user_id` (role, status, company_id)
  */
 export async function GET(request: NextRequest) {
   try {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
+import { isAdminDashboardRole } from '@/app/api/_lib/adminDashboardRole';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -22,7 +23,14 @@ export async function middleware(request: NextRequest) {
 
   let response = NextResponse.next({ request });
 
-  // Validación de sesión real con Supabase Auth (crítico para datos industriales)
+  const authCookie = request.cookies.get('trazzos_auth');
+  const walletCookie = request.cookies.get('trazzos_wallet');
+  const userCookie = request.cookies.get('trazzos_user');
+  const legacyCookieAuthed =
+    authCookie?.value === 'ok' && (!!walletCookie?.value || !!userCookie?.value);
+
+  let supabaseUser: { id: string } | null = null;
+
   if (supabaseUrl && supabaseAnonKey && !supabaseAnonKey.includes('placeholder')) {
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
@@ -42,22 +50,59 @@ export async function middleware(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (user) {
-      return response;
+      supabaseUser = user;
     }
   }
 
-  // Fallback: cookie trazzos_auth (compatibilidad con flujos que aún no usan sesión Supabase)
-  const authCookie = request.cookies.get('trazzos_auth');
-  if (authCookie?.value === 'ok') {
-    return response;
+  const isAuthed = Boolean(supabaseUser) || legacyCookieAuthed;
+
+  if (!isAuthed) {
+    const nextUrl = request.nextUrl.clone();
+    nextUrl.pathname = '/login';
+    if (pathname !== '/') {
+      nextUrl.searchParams.set('next', pathname);
+    }
+    return NextResponse.redirect(nextUrl);
   }
 
-  const nextUrl = request.nextUrl.clone();
-  nextUrl.pathname = '/login';
-  if (pathname !== '/') {
-    nextUrl.searchParams.set('next', pathname);
+  const isAdminPath = pathname.startsWith('/admin');
+  if (isAdminPath) {
+    let role: string | null = null;
+
+    if (supabaseUrl && supabaseAnonKey && !supabaseAnonKey.includes('placeholder') && supabaseUser) {
+      const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              response.cookies.set(name, value, options);
+            });
+          },
+        },
+      });
+      const { data: row } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('user_id', supabaseUser.id)
+        .maybeSingle();
+      role = row?.role ?? null;
+    }
+
+    if (!role) {
+      role = request.cookies.get('trazzos_profile_role')?.value ?? null;
+    }
+
+    if (!isAdminDashboardRole(role)) {
+      const denied = request.nextUrl.clone();
+      denied.pathname = '/';
+      denied.searchParams.set('error', 'admin_only');
+      return NextResponse.redirect(denied);
+    }
   }
-  return NextResponse.redirect(nextUrl);
+
+  return response;
 }
 
 export const config = {

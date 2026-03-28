@@ -22,7 +22,7 @@ export type ResolveAuthenticatedProfileResult =
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Misma lógica que GET /api/auth/profile: cookies Trazzos + auth.users + tabla profiles.
+ * Misma lógica que GET /api/auth/profile: cookies Trazzos + Supabase Auth (`auth.users`) + `public.profiles` (PK `user_id`).
  * Sirve para BFFs que deben usar el email real del usuario (p. ej. V2-03 upload-confirm → n8n).
  */
 export async function resolveAuthenticatedProfile(
@@ -81,7 +81,7 @@ export async function resolveAuthenticatedProfile(
     if (UUID_REGEX.test(identifier)) {
       const { data: profileById, error: profileError } = await supabaseServer
         .from('profiles')
-        .select('user_id, company_id')
+        .select('user_id, company_id, role, status')
         .eq('user_id', identifier)
         .maybeSingle();
 

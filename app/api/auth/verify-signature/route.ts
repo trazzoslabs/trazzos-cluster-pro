@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyMessage } from 'ethers';
+import {
+  attachProfileSnapshotCookies,
+  fetchPublicProfileByUserId,
+  findAuthUserIdByWallet,
+} from '../../_lib/publicProfiles';
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,14 +37,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Crear respuesta con cookies httpOnly
+    const authUserId = await findAuthUserIdByWallet(recoveredAddress);
+    const profile = authUserId ? await fetchPublicProfileByUserId(authUserId) : null;
+
     const response = NextResponse.json(
-      { 
-        ok: true, 
+      {
+        ok: true,
         address: recoveredAddress,
-        message: 'Autenticación exitosa' 
+        message: 'Autenticación exitosa',
+        user_id: authUserId,
+        company_id: profile?.company_id ?? null,
+        role: profile?.role ?? null,
+        status: profile?.status ?? null,
       },
-      { status: 200 }
+      { status: 200 },
     );
 
     // Setear cookies httpOnly
@@ -66,6 +77,18 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 días
       path: '/',
     });
+
+    if (authUserId) {
+      response.cookies.set('trazzos_user_id', authUserId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        path: '/',
+      });
+    }
+
+    attachProfileSnapshotCookies(response, profile);
 
     return response;
   } catch (error) {
