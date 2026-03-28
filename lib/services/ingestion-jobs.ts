@@ -32,42 +32,59 @@ export async function getIngestionJobs(jobId?: string | null): Promise<Ingestion
   return (data ?? []) as IngestionJobRow[];
 }
 
+type IngestionJobLookupColumn =
+  | 'job_id'
+  | 'upload_id'
+  | 'mapping_profile_id'
+  | 'correlation_id';
+
+const INGESTION_JOB_SELECT_COLS =
+  'job_id, status, upload_id, pipeline_version, mapping_profile_id, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id';
+
 /**
- * Busca un job por job_id, upload_id o mapping_profile_id (para /ingestion/mapping/[id]).
- * 1) job_id = id, 2) upload_id = id, 3) mapping_profile_id = id.
- * Así n8n puede enviar el ID del perfil de mapeo y se redirige al job correcto.
+ * Una fila por coincidencia en `ingestion_jobs`. `limit(1)` + `order` evita errores de PostgREST
+ * si hubiera duplicados raros en upload_id; prioridad explícita entre consultas.
+ */
+async function findIngestionJobByColumn(
+  column: IngestionJobLookupColumn,
+  value: string,
+): Promise<IngestionJobRow | null> {
+  const { data, error } = await supabaseServer
+    .from('ingestion_jobs')
+    .select(INGESTION_JOB_SELECT_COLS)
+    .eq(column, value)
+    .order('started_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(`[ingestion-jobs] lookup ${column}=… falló:`, error.message);
+    return null;
+  }
+  return (data as IngestionJobRow) ?? null;
+}
+
+/**
+ * Resuelve un job para `/ingestion/mapping/[id]` y enlaces n8n V2-03.
+ * Orden: job_id → upload_id → mapping_profile_id → correlation_id (extra, por si el workflow envía correlation).
  */
 export async function getIngestionJobByJobIdOrUploadId(id: string): Promise<IngestionJobRow | null> {
   const trimmed = id?.trim();
   if (!trimmed) return null;
-  const cols = 'job_id, status, upload_id, pipeline_version, mapping_profile_id, rows_total, rows_ok, rows_error, started_at, ended_at, correlation_id';
-  const { data: byJob, error: errJob } = await supabaseServer
-    .from('ingestion_jobs')
-    .select(cols)
-    .eq('job_id', trimmed)
-    .maybeSingle();
-  if (!errJob && byJob) return byJob as IngestionJobRow;
-  const { data: byUpload, error: errUpload } = await supabaseServer
-    .from('ingestion_jobs')
-    .select(cols)
-    .eq('upload_id', trimmed)
-    .maybeSingle();
-  if (!errUpload && byUpload) return byUpload as IngestionJobRow;
-  const { data: byMappingProfile, error: errProfile } = await supabaseServer
-    .from('ingestion_jobs')
-    .select(cols)
-    .eq('mapping_profile_id', trimmed)
-    .maybeSingle();
-  if (errProfile) throw new Error('Failed to fetch ingestion job by id');
 
-  const { data: byCorrelation, error: errCorrelation } = await supabaseServer
-    .from('ingestion_jobs')
-    .select(cols)
-    .eq('correlation_id', trimmed)
-    .maybeSingle();
-  if (!errCorrelation && byCorrelation) return byCorrelation as IngestionJobRow;
+  const byJob = await findIngestionJobByColumn('job_id', trimmed);
+  if (byJob) return byJob;
 
-  return (byMappingProfile as IngestionJobRow) ?? null;
+  const byUpload = await findIngestionJobByColumn('upload_id', trimmed);
+  if (byUpload) return byUpload;
+
+  const byMappingProfile = await findIngestionJobByColumn('mapping_profile_id', trimmed);
+  if (byMappingProfile) return byMappingProfile;
+
+  const byCorrelation = await findIngestionJobByColumn('correlation_id', trimmed);
+  if (byCorrelation) return byCorrelation;
+
+  return null;
 }
 
 export async function updateIngestionJobStatus(jobId: string, status: 'completed'): Promise<void> {

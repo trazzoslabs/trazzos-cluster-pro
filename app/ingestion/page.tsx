@@ -223,6 +223,7 @@ export default function IngestionPage() {
     return [];
   };
 
+  /** Escapa un valor de celda CSV (RFC-style). No usar sobre la línea de cabecera completa. */
   const csvEscape = (value: unknown): string => {
     const str = String(value ?? '');
     if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
@@ -231,6 +232,16 @@ export default function IngestionPage() {
     return str;
   };
 
+  const cellPlainText = (value: unknown): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
+
+  /**
+   * JSON/JSONL → CSV: primera línea = nombres de columna separados por comas (texto plano, una celda por columna).
+   * Cada nombre se escapa solo si lleva comas/comillas/saltos; nunca se envuelve toda la cabecera en un solo campo.
+   */
   const buildPreparedUpload = async (inputFile: File): Promise<PreparedUpload> => {
     const ext = inputFile.name.split('.').pop()?.toLowerCase();
     const isJsonLike = ext === 'json' || ext === 'jsonl';
@@ -245,33 +256,61 @@ export default function IngestionPage() {
       };
     }
 
-    const header = 'company_id,item_category,description,quantity,unit,type';
-    let rows: any[] = [];
+    const rows: Record<string, unknown>[] = [];
 
     if (ext === 'jsonl') {
       const text = await inputFile.text();
-      rows = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const parsed = JSON.parse(t) as unknown;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            rows.push(parsed as Record<string, unknown>);
+          }
+        } catch {
+          /* línea inválida: omitir */
+        }
+      }
     } else {
-      const parsed = JSON.parse(await inputFile.text());
-      rows = Array.isArray(parsed) ? parsed : [parsed];
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await inputFile.text());
+      } catch {
+        throw new Error('El archivo JSON no es válido');
+      }
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item && typeof item === 'object' && !Array.isArray(item)) {
+            rows.push(item as Record<string, unknown>);
+          }
+        }
+      } else if (parsed && typeof parsed === 'object') {
+        rows.push(parsed as Record<string, unknown>);
+      }
     }
 
-    const csvRows = rows.map((r) =>
-      [
-        csvEscape(r?.company_id),
-        csvEscape(r?.item_category),
-        csvEscape(r?.description),
-        csvEscape(r?.quantity),
-        csvEscape(r?.unit),
-        csvEscape(r?.type),
-      ].join(','),
-    );
+    if (rows.length === 0) {
+      throw new Error('El JSON no contiene objetos (filas) para convertir a CSV');
+    }
 
-    const csv = [header, ...csvRows].join('\n');
+    const columnOrder: string[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      for (const key of Object.keys(row)) {
+        if (!seen.has(key)) {
+          seen.add(key);
+          columnOrder.push(key);
+        }
+      }
+    }
+
+    const headerLine = columnOrder.map((name) => csvEscape(name)).join(',');
+    const csvRows = rows.map((row) =>
+      columnOrder.map((key) => csvEscape(cellPlainText(row[key]))).join(','),
+    );
+    const csv = [headerLine, ...csvRows].join('\n');
+
     return {
       fileName: 'data.csv',
       contentType: 'text/csv',
@@ -669,6 +708,8 @@ export default function IngestionPage() {
       const uploadBlob = preparedUpload?.body || file;
       const uploadFileName = preparedUpload?.fileName || file.name;
       const uploadContentType = preparedUpload?.contentType || file.type || 'application/octet-stream';
+      /** V2-02 Parser-CSV: el switch de n8n espera tipo corto `csv`, no solo MIME. */
+      const sessionFileType = preparedUpload?.wasJsonConverted ? 'csv' : uploadContentType;
       const generatedJobId = forcedJobId || createClientJobId();
 
       const formData = new FormData();
@@ -677,7 +718,7 @@ export default function IngestionPage() {
       formData.append('user_id', finalUserId);
       formData.append('job_id', generatedJobId);
       formData.append('file_name', uploadFileName);
-      formData.append('file_type', uploadContentType);
+      formData.append('file_type', sessionFileType);
       formData.append('dataset_type', detectedType);
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
@@ -691,7 +732,7 @@ export default function IngestionPage() {
         user_id: finalUserId,
         job_id: generatedJobId,
         file_name: uploadFileName,
-        file_type: uploadContentType,
+        file_type: sessionFileType,
         dataset_type: detectedType,
         cluster_id: FIXED_CLUSTER_ID,
       });
@@ -1112,14 +1153,26 @@ export default function IngestionPage() {
         console.log('[handleUpload] filas totales para data:', fullRows.length);
       }
 
-      // Fase 1 (Session): pedir signed_url + IDs al proxy
+      let preparedForSession: PreparedUpload | null = null;
+      if (fileExtension === '.json' || fileExtension === '.jsonl') {
+        preparedForSession = await buildPreparedUpload(file);
+      }
+
+      const sessionFile = preparedForSession?.body ?? file;
+      const sessionFileName = preparedForSession?.fileName ?? file.name;
+      const sessionFileType = preparedForSession?.wasJsonConverted
+        ? 'csv'
+        : (file.type || 'application/octet-stream');
+      const sessionDatasetType = preparedForSession?.wasJsonConverted ? 'needs' : datasetType;
+
+      // Fase 1 (Session): pedir signed_url + IDs al proxy (JSON/JSONL ya convertidos a CSV en cliente)
       const formData = new FormData();
-      formData.append('file', file, file.name);
+      formData.append('file', sessionFile, sessionFileName);
       formData.append('company_id', FIXED_COMPANY_ID);
       formData.append('user_id', FIXED_USER_ID);
-      formData.append('file_name', file.name);
-      formData.append('file_type', file.type || 'application/octet-stream');
-      formData.append('dataset_type', datasetType);
+      formData.append('file_name', sessionFileName);
+      formData.append('file_type', sessionFileType);
+      formData.append('dataset_type', sessionDatasetType);
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
       const sessionResponse = await fetch('/api/workflows/upload-session', {
@@ -1162,12 +1215,15 @@ export default function IngestionPage() {
       };
       persistTrackingIds({ jobId: receivedJobId, uploadId: receivedUploadId, correlationId: receivedCorrelationId });
 
-      // Fase 2 (Upload): subir archivo a signed_url de storage
+      // Fase 2 (Upload): subir el mismo cuerpo que declaró la sesión (CSV si hubo conversión desde JSON)
       setUploadPhase('uploading');
+      const putContentType =
+        preparedForSession?.wasJsonConverted ? 'text/csv' : (file.type || 'application/octet-stream');
+      const putBody = preparedForSession?.body ?? file;
       const uploadResponse = await fetch(String(signedUrlFromSession), {
         method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        body: file,
+        headers: { 'Content-Type': putContentType },
+        body: putBody,
       });
       if (!uploadResponse.ok) {
         const uploadBody = await uploadResponse.text().catch(() => '');

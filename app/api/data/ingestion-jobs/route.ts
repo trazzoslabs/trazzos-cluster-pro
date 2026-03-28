@@ -34,8 +34,13 @@ export async function GET(request: NextRequest) {
     const jobId = searchParams.get('job_id');
     const id = searchParams.get('id');
 
-    if (id) {
-      const job = await getIngestionJobByJobIdOrUploadId(id);
+    if (id !== null) {
+      const trimmed = id.trim();
+      if (!trimmed) {
+        return createErrorResponse('id no puede estar vacío', 400);
+      }
+      // Mismo identificador en URL/query: job_id | upload_id | mapping_profile_id (y correlation_id en servicio)
+      const job = await getIngestionJobByJobIdOrUploadId(trimmed);
       if (!job) return createErrorResponse('Job no encontrado', 404);
       return createSuccessResponse(job);
     }

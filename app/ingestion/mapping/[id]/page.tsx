@@ -1,21 +1,25 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
+function normalizeMappingRouteId(raw: string | string[] | undefined): string | undefined {
+  if (raw == null) return undefined;
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  const t = typeof s === 'string' ? s.trim() : '';
+  return t.length > 0 ? t : undefined;
+}
+
 /**
- * Página de mapeo: /ingestion/mapping/[id]
- * n8n construye el enlace como app_url + '/mapping/' + uuid → /ingestion/mapping/UUID
- * [id] puede ser job_id, upload_id o mapping_profile_id. La API busca en ingestion_jobs en este orden:
- * 1) job_id = id, 2) upload_id = id, 3) mapping_profile_id = id.
- * Si encuentra el job, redirige a /ingestion/jobs/[job_id]. Así se evita "Job no encontrado"
- * cuando n8n envía el ID del perfil de mapeo en lugar del ID del trabajo.
+ * Página de resolución: /ingestion/mapping/[id]
+ * n8n (V2-03) puede enlazar con job_id, upload_id o mapping_profile_id.
+ * GET /api/data/ingestion-jobs?id=… resuelve en ingestion_jobs y aquí redirigimos a /ingestion/jobs/[job_id].
  */
 export default function IngestionMappingPage() {
   const params = useParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
+  const id = useMemo(() => normalizeMappingRouteId(params?.id as string | string[] | undefined), [params?.id]);
   const [status, setStatus] = useState<'loading' | 'redirecting' | 'not-found'>('loading');
 
   useEffect(() => {
@@ -25,31 +29,41 @@ export default function IngestionMappingPage() {
     }
 
     let cancelled = false;
+    const ac = new AbortController();
 
     const resolveAndRedirect = async () => {
+      const url = `/api/data/ingestion-jobs?id=${encodeURIComponent(id)}`;
       try {
-        const res = await fetch(`/api/data/ingestion-jobs?id=${encodeURIComponent(id)}`);
+        const res = await fetch(url, { signal: ac.signal, cache: 'no-store' });
         if (cancelled) return;
         if (!res.ok) {
           setStatus('not-found');
           return;
         }
-        const json = await res.json();
+        const json = await res.json().catch(() => null);
         const job = json?.data;
-        if (!job?.job_id) {
+        const jobId =
+          job && typeof job === 'object' && typeof (job as { job_id?: unknown }).job_id === 'string'
+            ? (job as { job_id: string }).job_id.trim()
+            : '';
+        if (!jobId) {
           setStatus('not-found');
           return;
         }
         if (cancelled) return;
         setStatus('redirecting');
-        router.replace(`/ingestion/jobs/${job.job_id}`);
-      } catch {
+        router.replace(`/ingestion/jobs/${encodeURIComponent(jobId)}`);
+      } catch (e) {
+        if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
         if (!cancelled) setStatus('not-found');
       }
     };
 
     resolveAndRedirect();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
   }, [id, router]);
 
   if (!id) {

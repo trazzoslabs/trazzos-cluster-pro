@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
+import { resolveAuthenticatedProfile } from '../../_lib/resolveAuthenticatedProfile';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
@@ -75,18 +76,38 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('job_id no puede ser la cadena literal "undefined"', 400);
     }
 
-    const rawUserEmail = body?.user_email ?? body?.userEmail;
-    const user_email =
-      typeof rawUserEmail === 'string' ? rawUserEmail.trim() : String(rawUserEmail ?? '').trim();
+    const auth = await resolveAuthenticatedProfile(request);
+    if (!auth.ok) {
+      console.error('[upload-confirm] Sin sesión o perfil:', auth.status, auth.message);
+      return createErrorResponse(auth.message, auth.status);
+    }
 
+    let user_email = (auth.email ?? '').trim();
     if (isInvalidTrackingValue(user_email)) {
-      console.error('[upload-confirm] 400: user_email faltante');
-      return createErrorResponse('user_email del perfil es requerido (V2-03)', 400);
+      console.error('[upload-confirm] 400: email ausente en perfil/sesión (V2-03 requiere correo para notificación)');
+      return createErrorResponse(
+        'No hay email en el perfil del usuario autenticado. Inicia sesión con una cuenta que tenga correo para recibir el enlace de mapeo (V2-03).',
+        400,
+      );
     }
 
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user_email);
     if (!emailOk) {
-      return createErrorResponse('user_email debe ser un correo válido', 400);
+      return createErrorResponse(
+        'El email del perfil autenticado no es válido; actualiza tu cuenta o contacta soporte (V2-03).',
+        400,
+      );
+    }
+
+    const bodyEmailRaw = body?.user_email ?? body?.userEmail;
+    const bodyEmail =
+      typeof bodyEmailRaw === 'string' ? bodyEmailRaw.trim() : String(bodyEmailRaw ?? '').trim();
+    if (bodyEmail && bodyEmail.toLowerCase() !== user_email.toLowerCase()) {
+      console.warn(
+        '[upload-confirm] user_email del body distinto al del perfil; usando solo perfil para n8n. body=%s perfil=%s',
+        bodyEmail,
+        user_email,
+      );
     }
 
     /**
