@@ -10,6 +10,7 @@ import {
 } from '@/lib/ingestionFileExtract';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
 import { AUTH_BYPASS_COMPANY_ID, AUTH_BYPASS_USER_ID } from '@/lib/authBypass';
+import { CARTAGENA_DEMO_SESSION_KEY } from '@/lib/cartagenaDemoSynergies';
 import SectionCard from '../../components/ui/SectionCard';
 
 export interface IngestionJobMappingSnapshot {
@@ -628,6 +629,7 @@ export default function IngestionMappingWorkflow({
       });
       if (typeof window !== 'undefined') {
         try {
+          sessionStorage.setItem(CARTAGENA_DEMO_SESSION_KEY, 'true');
           sessionStorage.removeItem(trazzosMappingSourceColumnsStorageKey(jobId));
           localStorage.removeItem(mappingColumnDraftStorageKey(jobId));
         } catch {

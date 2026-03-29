@@ -1,5 +1,17 @@
 import { AUTH_BYPASS_COMPANY_ID } from '@/lib/authBypass';
 
+/** Session flag tras “Aprobar” en el mapeo bypass; sincroniza dashboard, sinergias y vista 3D. */
+export const CARTAGENA_DEMO_SESSION_KEY = 'cartagena_demo_active';
+
+export function isDemoActive(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return sessionStorage.getItem(CARTAGENA_DEMO_SESSION_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function isCartagenaBypassCompanyId(companyId: string | null | undefined): boolean {
   return (companyId ?? '').trim() === AUTH_BYPASS_COMPANY_ID;
 }

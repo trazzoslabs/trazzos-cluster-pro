@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import BrandLogo from './BrandLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import FloatingActions from './FloatingActions';
+import DemoResetButton from './DemoResetButton';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -87,6 +88,7 @@ export default function AppShell({ children }: AppShellProps) {
 
       {/* Botones flotantes - Solo en páginas autenticadas */}
       {!isAuthPage && <FloatingActions />}
+      {!isAuthPage && <DemoResetButton />}
     </div>
   );
 }

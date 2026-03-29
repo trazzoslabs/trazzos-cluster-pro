@@ -2,11 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import {
-  aggregateSynergyDashboardMetrics,
-  getCartagenaDemoSynergyDashboardStats,
-  isCartagenaBypassCompanyId,
-} from '@/lib/cartagenaDemoSynergies';
+import { isDemoActive } from '@/lib/cartagenaDemoSynergies';
 import PageTitle from './components/ui/PageTitle';
 import SectionCard from './components/ui/SectionCard';
 import StatusBadge from './components/ui/StatusBadge';
@@ -50,21 +46,25 @@ export default function Home() {
     fetchDashboardData();
   }, []);
 
-  const fetchDashboardData = async () => {
-    let companyId: string | null = null;
-    try {
-      const profileRes = await fetch('/api/auth/profile');
-      if (profileRes.ok) {
-        const profileJson = await profileRes.json();
-        companyId =
-          typeof profileJson?.data?.company_id === 'string'
-            ? profileJson.data.company_id.trim()
-            : null;
+  useEffect(() => {
+    const syncDemoSynergyMetrics = () => {
+      if (isDemoActive()) {
+        setTotalSynergies(4);
+        setActiveSynergies(4);
+        setAvgSynergySavingsPct(16.5);
+      } else {
+        setTotalSynergies(0);
+        setActiveSynergies(0);
+        setAvgSynergySavingsPct(0);
       }
-    } catch {
-      /* sin perfil: flujo normal */
-    }
+      setLoadingSynergies(false);
+    };
+    syncDemoSynergyMetrics();
+    window.addEventListener('focus', syncDemoSynergyMetrics);
+    return () => window.removeEventListener('focus', syncDemoSynergyMetrics);
+  }, []);
 
+  const fetchDashboardData = async () => {
     // Fetch Cargas de Datos
     try {
       const jobsRes = await fetch('/api/data/ingestion-jobs');
@@ -82,32 +82,7 @@ export default function Home() {
       setLoadingJobs(false);
     }
 
-    // Oportunidades Conjuntas (demo Cartagena: sin llamar a la API de sinergias)
-    try {
-      if (isCartagenaBypassCompanyId(companyId)) {
-        const stats = getCartagenaDemoSynergyDashboardStats();
-        setTotalSynergies(stats.total);
-        setActiveSynergies(stats.activeInPipeline);
-        setAvgSynergySavingsPct(stats.avgSavingsPct);
-      } else {
-        const params = new URLSearchParams();
-        if (companyId) params.set('company_id', companyId);
-        const qs = params.toString();
-        const synergiesRes = await fetch(qs ? `/api/data/synergies?${qs}` : '/api/data/synergies');
-        if (synergiesRes.ok) {
-          const synergiesData = await synergiesRes.json();
-          const list = synergiesData.data || [];
-          const stats = aggregateSynergyDashboardMetrics(list);
-          setTotalSynergies(stats.total);
-          setActiveSynergies(stats.activeInPipeline);
-          setAvgSynergySavingsPct(stats.avgSavingsPct);
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching synergies:', err);
-    } finally {
-      setLoadingSynergies(false);
-    }
+    // Oportunidades Conjuntas: métricas solo vía `isDemoActive()` (useEffect dedicado)
 
     // Fetch Gestión de Decisiones
     try {

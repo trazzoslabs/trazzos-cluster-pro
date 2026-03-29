@@ -42,6 +42,11 @@ const SynergyMap = dynamic(() => import('../synergies/components/SynergyMap'), {
 import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
 import { companyEntryId, companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
 import {
+  getCartagenaDemoSynergyRows,
+  isCartagenaBypassCompanyId,
+  isDemoActive,
+} from '@/lib/cartagenaDemoSynergies';
+import {
   TRAZZOS_MARTS_CHANNEL,
   isMartsRefreshCompletedPayload,
 } from '@/lib/trazzosMartsBroadcast';
@@ -142,6 +147,8 @@ export default function IntelligencePage() {
   const [geoCompanies, setGeoCompanies] = useState<any[]>([]);
   const [geoSelectedCompanyId, setGeoSelectedCompanyId] = useState<string | null>(null);
   const [showConnections, setShowConnections] = useState(true);
+  const [profileCompanyId, setProfileCompanyId] = useState<string | null>(null);
+  const [sessionDemoLive, setSessionDemoLive] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   /** Estados de empresas para el mapa (mv_cluster / company_sites). */
@@ -162,6 +169,13 @@ export default function IntelligencePage() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    const sync = () => setSessionDemoLive(isDemoActive());
+    sync();
+    window.addEventListener('focus', sync);
+    return () => window.removeEventListener('focus', sync);
+  }, []);
+
   // Polling solo en pestaña geoespacial: se limpia al cambiar de pestaña
   useEffect(() => {
     if (activeMode !== 'geospatial') return;
@@ -169,7 +183,14 @@ export default function IntelligencePage() {
     const tick = async () => {
       await refreshCompaniesGeo('interval');
       try {
-        const synRes = await fetch('/api/data/synergies');
+        if (isCartagenaBypassCompanyId(profileCompanyId)) {
+          setSynergies(getCartagenaDemoSynergyRows() as unknown as Synergy[]);
+          return;
+        }
+        const synUrl = profileCompanyId
+          ? `/api/data/synergies?company_id=${encodeURIComponent(profileCompanyId)}`
+          : '/api/data/synergies';
+        const synRes = await fetch(synUrl);
         if (synRes.ok) {
           const synData = await synRes.json();
           setSynergies(synData.data || []);
@@ -182,7 +203,7 @@ export default function IntelligencePage() {
     void tick();
     const intervalId = setInterval(tick, 30_000);
     return () => clearInterval(intervalId);
-  }, [activeMode, refreshCompaniesGeo]);
+  }, [activeMode, refreshCompaniesGeo, profileCompanyId]);
 
   // Escucha activa: `marts_refresh_completed` vía BroadcastChannel (mismo origen), p. ej. tras refresh en Ingesta.
   // Sin recargar la página: actualiza datos del mapa geoespacial.
@@ -216,9 +237,24 @@ export default function IntelligencePage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      const [synergiesRes, rfpsRes, posRes, decisionsRes, companiesGeoRes, auditRes, needsRes] = await Promise.all([
-        fetch('/api/data/synergies'),
+
+      let companyId: string | null = null;
+      try {
+        const profileRes = await fetch('/api/auth/profile');
+        if (profileRes.ok) {
+          const profileJson = await profileRes.json();
+          companyId =
+            typeof profileJson?.data?.company_id === 'string'
+              ? profileJson.data.company_id.trim()
+              : null;
+        }
+      } catch {
+        /* sin perfil */
+      }
+      setProfileCompanyId(companyId);
+      const cartagenaBypass = isCartagenaBypassCompanyId(companyId);
+
+      const [rfpsRes, posRes, decisionsRes, companiesGeoRes, auditRes, needsRes] = await Promise.all([
         fetch('/api/data/rfps'),
         fetch('/api/data/purchase-orders'),
         fetch('/api/data/committee-decisions'),
@@ -227,7 +263,20 @@ export default function IntelligencePage() {
         fetch('/api/data/needs'),
       ]);
 
-      const synergiesData = await synergiesRes.json();
+      let synergiesList: Synergy[] = [];
+      if (cartagenaBypass) {
+        synergiesList = getCartagenaDemoSynergyRows() as unknown as Synergy[];
+      } else {
+        const synUrl = companyId
+          ? `/api/data/synergies?company_id=${encodeURIComponent(companyId)}`
+          : '/api/data/synergies';
+        const synergiesRes = await fetch(synUrl);
+        if (synergiesRes.ok) {
+          const synergiesData = await synergiesRes.json();
+          synergiesList = synergiesData.data || [];
+        }
+      }
+
       const rfpsData = await rfpsRes.json();
       const posData = await posRes.json();
       const decisionsData = await decisionsRes.json();
@@ -241,7 +290,7 @@ export default function IntelligencePage() {
         sample: companiesGeoData.data?.slice(0, 2),
       });
 
-      setSynergies(synergiesData.data || []);
+      setSynergies(synergiesList);
       setRfps(rfpsData.data || []);
       setPurchaseOrders(posData.data || []);
       setDecisions(decisionsData.data || []);
@@ -490,7 +539,10 @@ export default function IntelligencePage() {
   const totalSavings = totalVolume > 0
     ? Math.round(totalVolume * 0.12) // estimación conservadora 12 % consolidación
     : purchaseOrders.reduce((sum, po) => sum + (po.total_amount || 0), 0);
-  const activeSynergies = synergies.filter(s => s.status === 'approved' || s.status === 'rfp').length;
+  const activeSynergies = synergies.filter((s) => {
+    const st = (s.status ?? '').toLowerCase();
+    return st === 'approved' || st === 'rfp' || st === 'active' || st === 'detected';
+  }).length;
   const avgCloseTime = rfps.length > 0 
     ? rfps.reduce((sum, rfp) => {
         if (rfp.created_at && rfp.closing_at) {
@@ -621,6 +673,7 @@ export default function IntelligencePage() {
       }
     });
 
+    const synergyActive = (synergy.status ?? '').toLowerCase() === 'active';
     for (let i = 0; i < entries.length; i += 1) {
       for (let j = i + 1; j < entries.length; j += 1) {
         const sourceKey = entries[i].key;
@@ -630,6 +683,7 @@ export default function IntelligencePage() {
             sourceKey,
             targetKey,
             intensity: Math.max(0.8, Math.min(2.5, extractVolumeTotal(synergy.volume_total_json) / 8000)),
+            synergyActive,
           });
         }
       }
@@ -758,6 +812,8 @@ export default function IntelligencePage() {
                     links={sceneLinks}
                     selectedNodeKey={selectedCompanyId}
                     onNodeSelect={setSelectedCompanyId}
+                    industrialDemoMode={sessionDemoLive}
+                    sessionDemoActive={sessionDemoLive}
                     onSelectCompany={(name) => {
                       const matched = sceneNodes.find((node) => node.name === name);
                       if (matched) setSelectedCompanyId(matched.key);

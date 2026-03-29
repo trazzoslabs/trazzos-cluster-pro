@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { CANONICAL_PURCHASE_ORDER_ENTITY_TYPE } from '@/lib/utils/normalization';
-import { isCartagenaBypassCompanyId, getCartagenaDemoSynergyRows } from '@/lib/cartagenaDemoSynergies';
+import { getCartagenaDemoSynergyRows, isDemoActive } from '@/lib/cartagenaDemoSynergies';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -63,53 +63,26 @@ function SynergiesContent() {
   });
 
   useEffect(() => {
-    async function fetchSynergies() {
+    function loadSynergiesFromDemoState() {
       try {
         setLoading(true);
         setError(null);
-
-        let companyId: string | null = null;
-        try {
-          const profileRes = await fetch('/api/auth/profile');
-          if (profileRes.ok) {
-            const profileJson = await profileRes.json();
-            companyId =
-              typeof profileJson?.data?.company_id === 'string'
-                ? profileJson.data.company_id.trim()
-                : null;
-          }
-        } catch {
-          /* perfil opcional */
-        }
-
-        if (isCartagenaBypassCompanyId(companyId)) {
+        if (isDemoActive()) {
           setSynergies(getCartagenaDemoSynergyRows() as unknown as Synergy[]);
-          return;
+        } else {
+          setSynergies([]);
         }
-
-        const params = new URLSearchParams();
-        if (clusterId) params.set('cluster_id', clusterId);
-        if (companyId) params.set('company_id', companyId);
-        const qs = params.toString();
-        const url = qs ? `/api/data/synergies?${qs}` : '/api/data/synergies';
-
-        const response = await fetch(url);
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch synergies: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        setSynergies(result.data || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load synergies');
-        console.error('Error fetching synergies:', err);
+        console.error('Error loading synergies:', err);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchSynergies();
+    loadSynergiesFromDemoState();
+    window.addEventListener('focus', loadSynergiesFromDemoState);
+    return () => window.removeEventListener('focus', loadSynergiesFromDemoState);
   }, [clusterId]);
 
   useEffect(() => {
@@ -400,8 +373,10 @@ function SynergiesContent() {
           <svg className="mx-auto h-12 w-12 text-zinc-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
           </svg>
-          <p className="text-zinc-400 text-lg font-medium mb-1">Sin sinergias disponibles</p>
-          <p className="text-zinc-500 text-sm">Sube datos desde Ingesta y ejecuta &quot;Refrescar Vistas&quot; para generar sinergias.</p>
+          <p className="text-zinc-400 text-lg font-medium mb-1">No hay datos cargados</p>
+          <p className="text-zinc-500 text-sm">
+            Completa la ingesta y el mapeo en Cargas de Datos para activar la demo del cluster (o pulsa &quot;Reiniciar Demo&quot; si ya la habías iniciado).
+          </p>
           <p className="text-zinc-500 text-xs mt-3 font-mono">
             Buscando datos para el Cluster: {(clusterId || 'c1057e40').slice(0, 8)}...
           </p>
