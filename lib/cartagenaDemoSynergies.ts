@@ -257,3 +257,98 @@ export function getCartagenaDemoSynergyDashboardStats(): {
 } {
   return aggregateSynergyDashboardMetrics(getCartagenaDemoSynergyRows());
 }
+
+/** RFP ficticio — Gestión de Decisiones / workbench con bypass activo. */
+export const CARTAGENA_DEMO_RFP_ID = 'rfp-cartagena-001';
+
+export interface CartagenaDemoRfp {
+  rfp_id: string;
+  title: string;
+  description: string;
+  synergy_id: string | null;
+  status: string;
+  published_at: string;
+  closing_at: string;
+}
+
+/** Lista con un único RFP de prueba para el selector del workbench. */
+export function getCartagenaDemoRFPs(): CartagenaDemoRfp[] {
+  const now = Date.now();
+  return [
+    {
+      rfp_id: CARTAGENA_DEMO_RFP_ID,
+      title: 'Suministro Global de EPP - Cluster Mamonal 2026',
+      description: 'RFP conjunta para Reficar, Yara y Argos.',
+      synergy_id: null,
+      status: 'OPEN',
+      published_at: new Date(now - 7 * 86400000).toISOString(),
+      closing_at: new Date(now + 83 * 86400000).toISOString(),
+    },
+  ];
+}
+
+export function isCartagenaDemoRfpId(rfpId: string | null | undefined): boolean {
+  return (rfpId ?? '').trim() === CARTAGENA_DEMO_RFP_ID;
+}
+
+/** Ofertas comparativas precalculadas (ahorro y cumplimiento). */
+export interface CartagenaDemoComparativeOffer {
+  offer_id: string;
+  rfp_id: string;
+  supplier_label: string;
+  supplier_id: string | null;
+  price_total: number;
+  currency: string;
+  lead_time_days: number;
+  submitted_at: string;
+  savings_score_pct: number;
+  compliance_score_pct: number;
+}
+
+export function getCartagenaDemoComparativeOffers(): CartagenaDemoComparativeOffer[] {
+  const submitted = new Date().toISOString();
+  return [
+    {
+      offer_id: 'demo-offer-cartagena-local-a',
+      rfp_id: CARTAGENA_DEMO_RFP_ID,
+      supplier_label: 'Proveedor Local A',
+      supplier_id: null,
+      price_total: 428_000_000,
+      currency: 'COP',
+      lead_time_days: 21,
+      submitted_at: submitted,
+      savings_score_pct: 16.4,
+      compliance_score_pct: 88,
+    },
+    {
+      offer_id: 'demo-offer-cartagena-nacional-b',
+      rfp_id: CARTAGENA_DEMO_RFP_ID,
+      supplier_label: 'Proveedor Nacional B',
+      supplier_id: null,
+      price_total: 401_500_000,
+      currency: 'COP',
+      lead_time_days: 35,
+      submitted_at: submitted,
+      savings_score_pct: 21.8,
+      compliance_score_pct: 92,
+    },
+    {
+      offer_id: 'demo-offer-cartagena-consorcio-c',
+      rfp_id: CARTAGENA_DEMO_RFP_ID,
+      supplier_label: 'Consorcio Internacional C',
+      supplier_id: null,
+      price_total: 389_000_000,
+      currency: 'COP',
+      lead_time_days: 45,
+      submitted_at: submitted,
+      savings_score_pct: 24.2,
+      compliance_score_pct: 95,
+    },
+  ];
+}
+
+/** Misma forma que las ofertas del workbench, con etiqueta y puntajes para la tabla comparativa. */
+export function getCartagenaDemoWorkbenchOffers(): CartagenaDemoComparativeOffer[] {
+  return getCartagenaDemoComparativeOffers();
+}
+

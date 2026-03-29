@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { CANONICAL_PURCHASE_ORDER_ENTITY_TYPE, normalizeEntityType } from '@/lib/utils/normalization';
+import {
+  getCartagenaDemoRFPs,
+  getCartagenaDemoWorkbenchOffers,
+  isCartagenaDemoRfpId,
+  isDemoActive,
+} from '@/lib/cartagenaDemoSynergies';
+import Toast from '@/components/auth/Toast';
 import PageTitle from '../components/ui/PageTitle';
 import StepCard from '../components/ui/StepCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -13,6 +20,8 @@ interface Rfp {
   status: string | null;
   published_at: string | null;
   closing_at: string | null;
+  title?: string;
+  description?: string;
 }
 
 interface Offer {
@@ -23,6 +32,9 @@ interface Offer {
   currency: string | null;
   lead_time_days: number | null;
   submitted_at: string | null;
+  supplier_label?: string;
+  savings_score_pct?: number;
+  compliance_score_pct?: number;
 }
 
 interface ScoringRun {
@@ -93,17 +105,51 @@ export default function WorkbenchPage() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [correlationId, setCorrelationId] = useState<string>('');
+  const [toast, setToast] = useState<{ message: string; variant: 'success' } | null>(null);
+
+  const demoMode = isCartagenaDemoRfpId(selectedRfpId) && isDemoActive();
 
   useEffect(() => {
     fetchRfps();
   }, []);
 
   useEffect(() => {
-    if (selectedRfpId) {
-      fetchOffers();
-      fetchScoringRuns();
-      fetchPurchaseOrder();
+    setSelectedOfferId('');
+  }, [selectedRfpId]);
+
+  useEffect(() => {
+    if (!selectedRfpId) return;
+
+    if (isCartagenaDemoRfpId(selectedRfpId) && isDemoActive()) {
+      setLoadingOffers(true);
+      setLoadingScoring(true);
+      setLoadingPO(true);
+      setOffers(
+        getCartagenaDemoWorkbenchOffers().map((o) => ({
+          offer_id: o.offer_id,
+          rfp_id: o.rfp_id,
+          supplier_id: o.supplier_id,
+          price_total: o.price_total,
+          currency: o.currency,
+          lead_time_days: o.lead_time_days,
+          submitted_at: o.submitted_at,
+          supplier_label: o.supplier_label,
+          savings_score_pct: o.savings_score_pct,
+          compliance_score_pct: o.compliance_score_pct,
+        })),
+      );
+      setScoringRuns([]);
+      setPurchaseOrder(null);
+      setEvidence(null);
+      setLoadingOffers(false);
+      setLoadingScoring(false);
+      setLoadingPO(false);
+      return;
     }
+
+    fetchOffers();
+    fetchScoringRuns();
+    fetchPurchaseOrder();
   }, [selectedRfpId]);
 
   useEffect(() => {
@@ -112,13 +158,31 @@ export default function WorkbenchPage() {
     }
   }, [correlationId]);
 
+  useEffect(() => {
+    if (!demoMode || offers.length === 0) return;
+    setSelectedOfferId((prev) => prev || offers[0]!.offer_id);
+  }, [demoMode, offers]);
+
   const fetchRfps = async () => {
     try {
       setLoadingRfps(true);
       const response = await fetch('/api/data/rfps');
       if (response.ok) {
         const result = await response.json();
-        setRfps(result.data || []);
+        let list: Rfp[] = result.data || [];
+        if (typeof window !== 'undefined' && isDemoActive()) {
+          const demos: Rfp[] = getCartagenaDemoRFPs().map((d) => ({
+            rfp_id: d.rfp_id,
+            synergy_id: d.synergy_id,
+            status: d.status,
+            published_at: d.published_at,
+            closing_at: d.closing_at,
+            title: d.title,
+            description: d.description,
+          }));
+          list = [...demos, ...list.filter((r) => !isCartagenaDemoRfpId(r.rfp_id))];
+        }
+        setRfps(list);
       }
     } catch (err) {
       console.error('Error fetching RFPs:', err);
@@ -212,6 +276,22 @@ export default function WorkbenchPage() {
       return;
     }
 
+    if (isCartagenaDemoRfpId(selectedRfpId) && isDemoActive()) {
+      setSubmittingOffer(true);
+      setOfferError(null);
+      setOfferSuccess(false);
+      setToast({
+        message: 'Oferta registrada correctamente (demo, sin persistencia en base de datos).',
+        variant: 'success',
+      });
+      setOfferSuccess(true);
+      setSubmittingOffer(false);
+      window.setTimeout(() => {
+        window.location.href = '/';
+      }, 1600);
+      return;
+    }
+
     try {
       setSubmittingOffer(true);
       setOfferError(null);
@@ -246,6 +326,14 @@ export default function WorkbenchPage() {
   const handleGenerateScoring = async () => {
     if (!selectedRfpId) {
       setScoringError('Por favor selecciona un RFP primero');
+      return;
+    }
+
+    if (isCartagenaDemoRfpId(selectedRfpId) && isDemoActive()) {
+      setToast({
+        message: 'Demo Cartagena: la evaluación se muestra en la tabla de ofertas; no se escribe scoring en BD.',
+        variant: 'success',
+      });
       return;
     }
 
@@ -284,6 +372,25 @@ export default function WorkbenchPage() {
 
     if (decision === 'approve' && !selectedOfferId) {
       setDecisionError('Por favor selecciona una oferta para aprobar');
+      return;
+    }
+
+    if (isCartagenaDemoRfpId(selectedRfpId) && isDemoActive()) {
+      setSubmittingDecision(true);
+      setDecisionError(null);
+      setDecisionSuccess(false);
+      setToast({
+        message:
+          decision === 'approve'
+            ? 'Decisión del comité registrada: aprobación (demo, sin BD).'
+            : 'Decisión del comité registrada: rechazo (demo, sin BD).',
+        variant: 'success',
+      });
+      setDecisionSuccess(true);
+      setSubmittingDecision(false);
+      window.setTimeout(() => {
+        window.location.href = '/';
+      }, 1600);
       return;
     }
 
@@ -345,11 +452,18 @@ export default function WorkbenchPage() {
     }).format(amount);
   };
 
-  const selectedRfp = rfps.find(r => r.rfp_id === selectedRfpId);
+  const selectedRfp = rfps.find((r) => r.rfp_id === selectedRfpId);
   const hasOffers = offers.length > 0;
   const hasScoring = scoringRuns.length > 0;
   const hasDecision = decisionSuccess;
   const hasPO = purchaseOrder !== null;
+
+  const step2Active = !!selectedRfpId && !hasOffers;
+  const step2Completed = hasOffers;
+  const step3Active = !demoMode && hasOffers && !hasScoring;
+  const step3Completed = demoMode || hasScoring;
+  const step4Active = (demoMode || hasScoring) && !hasDecision;
+  const step4NeedsPriorSteps = !selectedRfpId || (!hasScoring && !demoMode);
 
   return (
     <div>
@@ -381,12 +495,20 @@ export default function WorkbenchPage() {
               <option value="">-- Seleccionar RFP --</option>
               {rfps.map((rfp) => (
                 <option key={rfp.rfp_id} value={rfp.rfp_id}>
-                  {rfp.rfp_id.substring(0, 8)}... - {rfp.status || 'N/A'}
+                  {rfp.title
+                    ? `${rfp.title} — ${rfp.status || 'N/A'}`
+                    : `${rfp.rfp_id.substring(0, 8)}... — ${rfp.status || 'N/A'}`}
                 </option>
               ))}
             </select>
             {selectedRfp && (
               <div className="mt-4 p-3 bg-zinc-900 rounded-lg">
+                {selectedRfp.title ? (
+                  <p className="text-sm font-medium text-white mb-1">{selectedRfp.title}</p>
+                ) : null}
+                {selectedRfp.description ? (
+                  <p className="text-sm text-zinc-300 mb-2">{selectedRfp.description}</p>
+                ) : null}
                 <p className="text-sm text-zinc-400">
                   Status: <StatusBadge status={selectedRfp.status} />
                 </p>
@@ -404,8 +526,8 @@ export default function WorkbenchPage() {
         stepNumber={2}
         title="Registrar Oferta"
         description="Crea una oferta demo para el RFP seleccionado"
-        isActive={!!selectedRfpId && !hasOffers}
-        isCompleted={hasOffers}
+        isActive={step2Active}
+        isCompleted={step2Completed}
       >
         {!selectedRfpId ? (
           <p className="text-zinc-400 text-sm">Primero selecciona un RFP</p>
@@ -413,10 +535,10 @@ export default function WorkbenchPage() {
           <div>
             <button
               onClick={handleCreateOffer}
-              disabled={submittingOffer || hasOffers}
+              disabled={submittingOffer || (hasOffers && !demoMode)}
               className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
             >
-              {submittingOffer ? 'Creando...' : 'Crear oferta demo'}
+              {submittingOffer ? 'Creando...' : demoMode ? 'Registrar Oferta' : 'Crear oferta demo'}
             </button>
 
             {offerError && (
@@ -440,8 +562,21 @@ export default function WorkbenchPage() {
                 <table className="w-full">
                   <thead className="bg-zinc-900">
                     <tr>
+                      {demoMode && (
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-300">Proveedor</th>
+                      )}
                       <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-300">Oferta ID</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-300">Precio</th>
+                      {demoMode && (
+                        <>
+                          <th className="px-4 py-2 text-left text-xs font-semibold text-[#10b981]">
+                            Ahorro (%)
+                          </th>
+                          <th className="px-4 py-2 text-left text-xs font-semibold text-[#10b981]">
+                            Cumplimiento (%)
+                          </th>
+                        </>
+                      )}
                       <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-300">Lead Time</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-300">Fecha</th>
                     </tr>
@@ -449,12 +584,27 @@ export default function WorkbenchPage() {
                   <tbody className="divide-y divide-zinc-700">
                     {offers.map((offer) => (
                       <tr key={offer.offer_id} className="hover:bg-zinc-700/50">
+                        {demoMode && (
+                          <td className="px-4 py-2 text-xs font-medium text-white">
+                            {offer.supplier_label ?? '—'}
+                          </td>
+                        )}
                         <td className="px-4 py-2 text-xs text-zinc-400 font-mono">
                           {offer.offer_id.substring(0, 8)}...
                         </td>
                         <td className="px-4 py-2 text-xs text-zinc-400">
                           {formatCurrency(offer.price_total, offer.currency)}
                         </td>
+                        {demoMode && (
+                          <>
+                            <td className="px-4 py-2 text-xs text-[#10b981] font-medium">
+                              {offer.savings_score_pct != null ? `${offer.savings_score_pct}%` : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-xs text-[#10b981] font-medium">
+                              {offer.compliance_score_pct != null ? `${offer.compliance_score_pct}%` : '—'}
+                            </td>
+                          </>
+                        )}
                         <td className="px-4 py-2 text-xs text-zinc-400">
                           {offer.lead_time_days || 'N/A'} días
                         </td>
@@ -476,8 +626,8 @@ export default function WorkbenchPage() {
         stepNumber={3}
         title="Generar Evaluación (Scoring)"
         description="Ejecuta el algoritmo de scoring para evaluar las ofertas"
-        isActive={hasOffers && !hasScoring}
-        isCompleted={hasScoring}
+        isActive={step3Active}
+        isCompleted={step3Completed}
       >
         {!selectedRfpId ? (
           <p className="text-zinc-400 text-sm">Completa los pasos anteriores</p>
@@ -485,7 +635,7 @@ export default function WorkbenchPage() {
           <div>
             <button
               onClick={handleGenerateScoring}
-              disabled={generatingScoring || hasScoring}
+              disabled={generatingScoring || hasScoring || demoMode}
               className="px-6 py-3 bg-[#9aff8d] hover:bg-[#9aff8d]/80 disabled:bg-zinc-700 disabled:text-zinc-400 text-[#232323] rounded-md transition-colors font-medium disabled:cursor-not-allowed"
             >
               {generatingScoring ? 'Generando...' : 'Generar evaluación'}
@@ -501,6 +651,13 @@ export default function WorkbenchPage() {
               <div className="mt-4 bg-green-900/20 border border-green-800 rounded-lg p-3">
                 <p className="text-green-300 text-sm">✓ Evaluación generada exitosamente</p>
               </div>
+            )}
+
+            {demoMode && (
+              <p className="mt-3 text-sm text-zinc-400">
+                En la demo Cartagena, el puntaje de ahorro y cumplimiento ya está en la tabla de ofertas del paso 2;
+                no se ejecuta scoring contra la base de datos.
+              </p>
             )}
 
             {loadingScoring ? (
@@ -534,10 +691,10 @@ export default function WorkbenchPage() {
         stepNumber={4}
         title="Decisión del Comité"
         description="Aprueba o rechaza el RFP basado en la evaluación"
-        isActive={hasScoring && !hasDecision}
+        isActive={step4Active}
         isCompleted={hasDecision}
       >
-        {!selectedRfpId || !hasScoring ? (
+        {step4NeedsPriorSteps ? (
           <p className="text-zinc-400 text-sm">Completa los pasos anteriores</p>
         ) : (
           <div>
@@ -567,7 +724,10 @@ export default function WorkbenchPage() {
                   <option value="">-- Seleccionar oferta --</option>
                   {offers.map((offer) => (
                     <option key={offer.offer_id} value={offer.offer_id}>
-                      {formatCurrency(offer.price_total, offer.currency)} - {offer.lead_time_days} días
+                      {demoMode && offer.supplier_label
+                        ? `${offer.supplier_label} — `
+                        : ''}
+                      {formatCurrency(offer.price_total, offer.currency)} — {offer.lead_time_days} días
                     </option>
                   ))}
                 </select>
@@ -760,6 +920,10 @@ export default function WorkbenchPage() {
           </div>
         )}
       </StepCard>
+
+      {toast && (
+        <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} duration={4000} />
+      )}
     </div>
   );
 }
