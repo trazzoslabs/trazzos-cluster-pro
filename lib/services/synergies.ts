@@ -4,6 +4,8 @@
  */
 
 import { supabaseServer } from '@/app/api/_lib/supabaseServer';
+import { AUTH_BYPASS_COMPANY_ID } from '@/lib/authBypass';
+import { getCartagenaDemoSynergyRows } from '@/lib/cartagenaDemoSynergies';
 import type { CompaniesInvolvedJson } from '@/lib/types/synergies';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -107,6 +109,14 @@ export interface GetSynergiesResult {
 
 export async function getSynergies(options: GetSynergiesOptions = {}): Promise<GetSynergiesResult> {
   const { clusterId, companyId, debug = false } = options;
+
+  if (companyId?.trim() === AUTH_BYPASS_COMPANY_ID) {
+    return {
+      rows: getCartagenaDemoSynergyRows() as unknown as GetSynergiesResult['rows'],
+      source: 'cartagena_demo_bypass',
+      usedFallback: false,
+    };
+  }
 
   let rows: Array<Record<string, unknown>> = [];
   let source = '';

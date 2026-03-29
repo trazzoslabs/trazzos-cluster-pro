@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import {
+  aggregateSynergyDashboardMetrics,
+  getCartagenaDemoSynergyDashboardStats,
+  isCartagenaBypassCompanyId,
+} from '@/lib/cartagenaDemoSynergies';
 import PageTitle from './components/ui/PageTitle';
 import SectionCard from './components/ui/SectionCard';
 import StatusBadge from './components/ui/StatusBadge';
@@ -28,6 +33,8 @@ export default function Home() {
 
   // Estado General - Oportunidades Conjuntas
   const [totalSynergies, setTotalSynergies] = useState<number>(0);
+  const [activeSynergies, setActiveSynergies] = useState<number>(0);
+  const [avgSynergySavingsPct, setAvgSynergySavingsPct] = useState<number>(0);
   const [loadingSynergies, setLoadingSynergies] = useState(true);
 
   // Estado General - Gestión de Decisiones
@@ -44,6 +51,20 @@ export default function Home() {
   }, []);
 
   const fetchDashboardData = async () => {
+    let companyId: string | null = null;
+    try {
+      const profileRes = await fetch('/api/auth/profile');
+      if (profileRes.ok) {
+        const profileJson = await profileRes.json();
+        companyId =
+          typeof profileJson?.data?.company_id === 'string'
+            ? profileJson.data.company_id.trim()
+            : null;
+      }
+    } catch {
+      /* sin perfil: flujo normal */
+    }
+
     // Fetch Cargas de Datos
     try {
       const jobsRes = await fetch('/api/data/ingestion-jobs');
@@ -61,12 +82,26 @@ export default function Home() {
       setLoadingJobs(false);
     }
 
-    // Fetch Oportunidades Conjuntas
+    // Oportunidades Conjuntas (demo Cartagena: sin llamar a la API de sinergias)
     try {
-      const synergiesRes = await fetch('/api/data/synergies');
-      if (synergiesRes.ok) {
-        const synergiesData = await synergiesRes.json();
-        setTotalSynergies((synergiesData.data || []).length);
+      if (isCartagenaBypassCompanyId(companyId)) {
+        const stats = getCartagenaDemoSynergyDashboardStats();
+        setTotalSynergies(stats.total);
+        setActiveSynergies(stats.activeInPipeline);
+        setAvgSynergySavingsPct(stats.avgSavingsPct);
+      } else {
+        const params = new URLSearchParams();
+        if (companyId) params.set('company_id', companyId);
+        const qs = params.toString();
+        const synergiesRes = await fetch(qs ? `/api/data/synergies?${qs}` : '/api/data/synergies');
+        if (synergiesRes.ok) {
+          const synergiesData = await synergiesRes.json();
+          const list = synergiesData.data || [];
+          const stats = aggregateSynergyDashboardMetrics(list);
+          setTotalSynergies(stats.total);
+          setActiveSynergies(stats.activeInPipeline);
+          setAvgSynergySavingsPct(stats.avgSavingsPct);
+        }
       }
     } catch (err) {
       console.error('Error fetching synergies:', err);
@@ -192,6 +227,24 @@ export default function Home() {
                   <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[#9aff8d]"></div>
                 ) : (
                   <span className="text-2xl font-bold text-[#9aff8d]">{totalSynergies}</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400">Sinergias activas (pipeline):</span>
+                {loadingSynergies ? (
+                  <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[#9aff8d]"></div>
+                ) : (
+                  <span className="text-xl font-semibold text-white">{activeSynergies}</span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400">Ahorro estimado (promedio):</span>
+                {loadingSynergies ? (
+                  <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-[#9aff8d]"></div>
+                ) : (
+                  <span className="text-xl font-semibold text-emerald-300">
+                    {totalSynergies > 0 ? `${avgSynergySavingsPct}%` : '—'}
+                  </span>
                 )}
               </div>
               <Link

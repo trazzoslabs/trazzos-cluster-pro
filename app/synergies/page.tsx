@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { CANONICAL_PURCHASE_ORDER_ENTITY_TYPE } from '@/lib/utils/normalization';
+import { isCartagenaBypassCompanyId, getCartagenaDemoSynergyRows } from '@/lib/cartagenaDemoSynergies';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -67,9 +68,30 @@ function SynergiesContent() {
         setLoading(true);
         setError(null);
 
-        const url = clusterId
-          ? `/api/data/synergies?cluster_id=${clusterId}`
-          : '/api/data/synergies';
+        let companyId: string | null = null;
+        try {
+          const profileRes = await fetch('/api/auth/profile');
+          if (profileRes.ok) {
+            const profileJson = await profileRes.json();
+            companyId =
+              typeof profileJson?.data?.company_id === 'string'
+                ? profileJson.data.company_id.trim()
+                : null;
+          }
+        } catch {
+          /* perfil opcional */
+        }
+
+        if (isCartagenaBypassCompanyId(companyId)) {
+          setSynergies(getCartagenaDemoSynergyRows() as unknown as Synergy[]);
+          return;
+        }
+
+        const params = new URLSearchParams();
+        if (clusterId) params.set('cluster_id', clusterId);
+        if (companyId) params.set('company_id', companyId);
+        const qs = params.toString();
+        const url = qs ? `/api/data/synergies?${qs}` : '/api/data/synergies';
 
         const response = await fetch(url);
 
