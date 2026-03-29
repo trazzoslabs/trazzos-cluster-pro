@@ -245,6 +245,7 @@ export async function POST(request: NextRequest) {
       safeLog('[upload-session] n8n no devolvió upload_id; usando canonicalUploadId ya persistido en uploads');
     }
 
+    /** `ingestion_jobs` no tiene `company_id` en el esquema auditado: no añadir esa columna al INSERT. */
     const { error: insertErr } = await supabaseServer
       .from('ingestion_jobs')
       .insert({

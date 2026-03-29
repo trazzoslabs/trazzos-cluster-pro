@@ -2,11 +2,35 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   AUTH_BYPASS_USER_EMAIL,
   AUTH_BYPASS_USER_ID,
   AUTH_BYPASS_COMPANY_ID,
 } from '@/lib/authBypass';
+
+const CARTAGENA_SIMULATED_MESSAGE =
+  '¡Conexión Exitosa con el Cluster de Cartagena! Preparando entorno de mapeo...';
+
+function navigateToMappingFromUrl(mappingUrl: string, router: ReturnType<typeof useRouter>): void {
+  if (typeof window === 'undefined') return;
+  const fallbackPath = `/ingestion/mapping/${encodeURIComponent(AUTH_BYPASS_USER_ID)}`;
+  if (!mappingUrl?.trim()) {
+    router.push(fallbackPath);
+    return;
+  }
+  try {
+    const u = new URL(mappingUrl.trim(), window.location.origin);
+    const path = `${u.pathname}${u.search}`;
+    if (u.origin === window.location.origin) {
+      router.push(path);
+    } else {
+      window.location.assign(mappingUrl.trim());
+    }
+  } catch {
+    router.push(fallbackPath);
+  }
+}
 import { supabaseClient } from '@/lib/supabaseClient';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
@@ -44,6 +68,8 @@ type DatasetType = 'shutdowns' | 'needs' | 'suppliers';
 type UploadPhase = 'idle' | 'validating' | 'uploading' | 'processing';
 
 export default function IngestionPage() {
+  const router = useRouter();
+
   /** Identidad fija (companies.company_id / profiles.user_id); sin Supabase Auth en esta pantalla. */
   const HARDCODED_COMPANY_ID = AUTH_BYPASS_COMPANY_ID;
   const HARDCODED_USER_ID = AUTH_BYPASS_USER_ID;
@@ -1019,6 +1045,8 @@ export default function IngestionPage() {
 
     console.log('[handleConfirm] IDs usados (desde sesión):', { jobId: jobIdStr, uploadId: uploadIdStr, correlationId: correlationIdStr });
 
+    let cartagenaSimulatedFlow = false;
+
     try {
       setLoadingConfirm(true);
       setErrorConfirm(null);
@@ -1085,8 +1113,23 @@ export default function IngestionPage() {
         if (response.ok) {
           console.log('[handleConfirm] Body completo de respuesta n8n V2:', text);
           try {
-            const parsed = text ? JSON.parse(text) : {};
-            setConfirmResponse(parsed.data || parsed);
+            const parsed = (text ? JSON.parse(text) : {}) as {
+              data?: Record<string, unknown>;
+            };
+            const inner = parsed.data !== undefined ? parsed.data : parsed;
+            const innerObj =
+              inner && typeof inner === 'object' && inner !== null
+                ? (inner as Record<string, unknown>)
+                : null;
+            if (innerObj?.simulated === true) {
+              cartagenaSimulatedFlow = true;
+              setConfirmResponse(innerObj);
+              setCompletionToast(CARTAGENA_SIMULATED_MESSAGE);
+              const mappingUrl = String(innerObj.mapping_url ?? innerObj.mapping_url_upload_id ?? '');
+              window.setTimeout(() => navigateToMappingFromUrl(mappingUrl, router), 2_000);
+            } else {
+              setConfirmResponse(parsed.data ?? parsed);
+            }
           } catch {
             setConfirmResponse({ message: text || 'OK' });
           }
@@ -1113,8 +1156,12 @@ export default function IngestionPage() {
       if (dispatched) {
         console.log('%c[V2 Completado] ✓ Confirm dispatched — esperando procesamiento de sinergias (V6)…', 'color: #9aff8d; font-weight: bold');
         setSuccessConfirm(true);
-        setCompletionToast('Confirmación enviada — refrescando vistas en 5s…');
-        setTimeout(() => setCompletionToast(null), 8000);
+        if (!cartagenaSimulatedFlow) {
+          setCompletionToast('Confirmación enviada — refrescando vistas en 5s…');
+          setTimeout(() => setCompletionToast(null), 8000);
+        } else {
+          setTimeout(() => setCompletionToast(null), 12_000);
+        }
 
         // Siempre: polling + refresco diferido de vistas materializadas
         fetchRecentJobs();
@@ -1329,6 +1376,20 @@ export default function IngestionPage() {
       if (!confirmResponse.ok) {
         const errBody = await confirmResponse.json().catch(() => ({}));
         throw new Error(errBody.error || errBody.message || `Error ${confirmResponse.status}`);
+      }
+
+      const confirmTextBody = await confirmResponse.text();
+      let confirmParsed: { data?: Record<string, unknown> } = {};
+      try {
+        confirmParsed = confirmTextBody ? JSON.parse(confirmTextBody) : {};
+      } catch {
+        /* noop */
+      }
+      const confirmInner = (confirmParsed.data ?? confirmParsed) as Record<string, unknown>;
+      if (confirmInner?.simulated === true) {
+        setCompletionToast(CARTAGENA_SIMULATED_MESSAGE);
+        const mappingUrl = String(confirmInner.mapping_url ?? confirmInner.mapping_url_upload_id ?? '');
+        window.setTimeout(() => navigateToMappingFromUrl(mappingUrl, router), 2_000);
       }
 
       setSessionResponse({

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
 import { resolveAuthenticatedProfile } from '../../_lib/resolveAuthenticatedProfile';
+import { AUTH_BYPASS_USER_ID } from '@/lib/authBypass';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_CONFIRM_WEBHOOK_URL = process.env.N8N_CONFIRM_WEBHOOK_URL;
@@ -32,6 +33,42 @@ function mappingUrlForUploadId(uploadId: string): string {
   const vercel = (process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//, '');
   if (vercel) return `https://${vercel}/ingestion/mapping/${encodeURIComponent(uploadId)}`;
   return '';
+}
+
+/** URL fija de demo cuando n8n falla (segmento = bypass user id, como en el spec de demo). */
+function simulatedDemoMappingUrl(): string {
+  const base = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+  if (base) return `${base}/ingestion/mapping/${AUTH_BYPASS_USER_ID}`;
+  const vercel = (process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//, '');
+  if (vercel) return `https://${vercel}/ingestion/mapping/${AUTH_BYPASS_USER_ID}`;
+  return `https://tu-app.vercel.app/ingestion/mapping/${AUTH_BYPASS_USER_ID}`;
+}
+
+/**
+ * Demo Cartagena: activa éxito simulado si n8n devuelve error de servidor (≥500),
+ * mensaje "No item to return", o 200 con cuerpo vacío/inútil. No simula 4xx.
+ */
+function n8nFailureIndicatesSimulatedSuccess(
+  response: Response,
+  responseText: string,
+  parsed: unknown,
+): boolean {
+  if (response.status >= 500) return true;
+
+  const raw = (responseText || '').trim();
+  const lower = raw.toLowerCase();
+  if (lower.includes('no item to return')) return true;
+
+  if (!response.ok) return false;
+
+  if (!raw || raw === '{}' || raw === '[]') return true;
+  if (lower.includes('no item')) return true;
+  if (parsed && typeof parsed === 'object' && parsed !== null) {
+    const o = parsed as Record<string, unknown>;
+    const err = String(o.error ?? o.message ?? '').toLowerCase();
+    if (err.includes('no item to return')) return true;
+  }
+  return false;
 }
 
 export async function POST(request: NextRequest) {
@@ -151,58 +188,77 @@ export async function POST(request: NextRequest) {
     const payloadJson = JSON.stringify(finalPayload);
     console.log('[upload-confirm] JSON exacto enviado a n8n (body, upload_id incluido):', payloadJson);
 
-    const response = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(finalPayload),
-    });
+    const simulatedBody = (reason: string) => {
+      const mapping_url = simulatedDemoMappingUrl();
+      console.warn('[upload-confirm] Éxito simulado (200):', reason, '| mapping_url=', mapping_url);
+      return createSuccessResponse(
+        {
+          simulated: true,
+          simulated_reason: reason,
+          message: 'Confirmación aceptada en modo demo (n8n no devolvió un ítem válido).',
+          mapping_url,
+          mapping_url_upload_id: mapping_url,
+          job_id: jobId,
+          upload_id: uploadIdValue,
+          correlation_id: correlationIdValue,
+          user_email,
+        },
+        200,
+        correlationId,
+      );
+    };
 
-    let data;
+    let response: Response;
+    let responseText = '';
     try {
-      const contentType = response.headers.get('content-type');
-      const responseText = await response.text();
-      
-      console.log('[upload-confirm] Response status:', response.status);
-      console.log('[upload-confirm] Response content-type:', contentType);
-      console.log('[upload-confirm] Response text length:', responseText?.length || 0);
-      console.log('[upload-confirm] Body completo de respuesta n8n V2:', responseText);
-      
-      // Verificar si la respuesta está vacía
-      if (!responseText || responseText.trim() === '' || responseText.trim() === '{}' || responseText.trim() === '[]') {
-        console.warn('[upload-confirm] n8n retornó respuesta vacía');
-        if (!response.ok) {
-          return createErrorResponse(
-            'n8n workflow failed: No item to return was found - La respuesta está vacía',
-            response.status,
-            correlationId
-          );
-        }
-        // Si la respuesta es OK pero vacía, retornar un objeto vacío
-        data = { message: 'Confirmación exitosa (sin datos adicionales)' };
-      } else if (contentType?.includes('application/json')) {
-        data = JSON.parse(responseText);
-      } else {
-        data = { message: responseText };
-      }
-    } catch (error) {
-      console.error('[upload-confirm] Error parsing n8n response:', error);
-      if (!response.ok) {
-        return createErrorResponse(
-          'n8n workflow failed: No item to return was found - Error al procesar respuesta',
-          response.status,
-          correlationId
-        );
-      }
-      data = { error: 'Failed to parse response' };
+      response = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(finalPayload),
+      });
+      responseText = await response.text();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[upload-confirm] Error de red / timeout llamando a n8n:', msg);
+      return simulatedBody(`fetch n8n falló: ${msg}`);
     }
 
-    if (!response.ok) {
-      console.error('[upload-confirm] n8n error:', data);
-      return createErrorResponse(
-        `n8n workflow failed: ${data.error || data.message || response.statusText}`,
-        response.status,
-        correlationId
+    const contentType = response.headers.get('content-type') || '';
+    console.log('[upload-confirm] Response status:', response.status);
+    console.log('[upload-confirm] Response content-type:', contentType);
+    console.log('[upload-confirm] Response text length:', responseText?.length || 0);
+    console.log('[upload-confirm] Body completo de respuesta n8n V2:', responseText);
+
+    let data: unknown;
+    try {
+      if (contentType.includes('application/json') && responseText.trim()) {
+        data = JSON.parse(responseText);
+      } else if (responseText.trim()) {
+        data = { message: responseText };
+      } else {
+        data = {};
+      }
+    } catch (parseErr) {
+      console.error('[upload-confirm] Error parseando JSON de n8n:', parseErr);
+      data = { raw: responseText };
+    }
+
+    if (n8nFailureIndicatesSimulatedSuccess(response, responseText, data)) {
+      return simulatedBody(
+        !response.ok
+          ? `HTTP ${response.status}`
+          : 'respuesta vacía o "No item to return"',
       );
+    }
+
+    const dataObj = data as Record<string, unknown>;
+    if (
+      data &&
+      typeof data === 'object' &&
+      Object.keys(dataObj).length === 0 &&
+      !('message' in dataObj)
+    ) {
+      return simulatedBody('objeto de respuesta sin campos útiles');
     }
 
     console.log(
@@ -211,16 +267,6 @@ export async function POST(request: NextRequest) {
       finalPayload?.job_id,
       finalPayload?.correlation_id,
     );
-
-    // Verificar que data tenga contenido válido
-    if (!data || (typeof data === 'object' && Object.keys(data).length === 0 && !data.message)) {
-      console.warn('[upload-confirm] Data vacío después del parseo');
-      return createErrorResponse(
-        'n8n workflow failed: No item to return was found - El resultado está vacío',
-        response.status,
-        correlationId
-      );
-    }
 
     return createSuccessResponse(data, response.status, correlationId);
   } catch (error) {
