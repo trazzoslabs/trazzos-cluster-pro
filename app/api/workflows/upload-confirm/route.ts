@@ -26,6 +26,14 @@ function isValidUUID(value: string): boolean {
   return UUID_REGEX.test(value.trim());
 }
 
+function mappingUrlForUploadId(uploadId: string): string {
+  const base = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+  if (base) return `${base}/ingestion/mapping/${encodeURIComponent(uploadId)}`;
+  const vercel = (process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//, '');
+  if (vercel) return `https://${vercel}/ingestion/mapping/${encodeURIComponent(uploadId)}`;
+  return '';
+}
+
 export async function POST(request: NextRequest) {
   try {
     if (!N8N_CONFIRM_WEBHOOK_URL && !N8N_WEBHOOK_BASE) {
@@ -114,11 +122,14 @@ export async function POST(request: NextRequest) {
      * V2-02 / V2-03: cuerpo JSON hacia n8n solo con estos cuatro campos.
      * Dataset, company, app_url, etc. los resuelve el flujo en n8n/DB a partir de upload_id/job_id.
      */
+    const mapping_url = mappingUrlForUploadId(uploadIdValue);
+
     const finalPayload = {
       job_id: jobId,
       upload_id: uploadIdValue,
       correlation_id: correlationIdValue,
       user_email,
+      ...(mapping_url ? { mapping_url, mapping_url_upload_id: mapping_url } : {}),
     };
     const correlationId = correlationIdValue;
 

@@ -8,6 +8,15 @@ const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL;
 const N8N_WEBHOOK_TOKEN = process.env.N8N_WEBHOOK_TOKEN;
 const SESSION_TIMEOUT_MS = 60_000;
 const ALLOWED_DATASET_TYPES = new Set(['shutdowns', 'needs', 'suppliers']);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function publicAppBaseUrl(): string {
+  const explicit = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+  if (explicit) return explicit;
+  const vercel = (process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//, '');
+  if (vercel) return `https://${vercel}`;
+  return '';
+}
 
 /**
  * Si n8n devuelve solo la ruta (p. ej. /storage/v1/object/sign/...), antepone SUPABASE_URL.
@@ -88,9 +97,18 @@ export async function POST(request: NextRequest) {
       return createErrorResponse("dataset_type inválido. Usa 'shutdowns', 'needs' o 'suppliers'", 400);
     }
 
-    const generatedJobId = crypto.randomUUID();
+    const formJobIdRaw = String(form.get('job_id') || '').trim();
+    const generatedJobId = UUID_REGEX.test(formJobIdRaw) ? formJobIdRaw : crypto.randomUUID();
     /** Mismo valor que correlation_id en V2-02 (auditoría y trazabilidad por carga). */
     const canonicalUploadId = crypto.randomUUID();
+
+    const appBase = publicAppBaseUrl();
+    const mappingUrlForUploadId = appBase
+      ? `${appBase}/ingestion/mapping/${encodeURIComponent(canonicalUploadId)}`
+      : '';
+    const mappingUrlForJobId = appBase
+      ? `${appBase}/ingestion/mapping/${encodeURIComponent(generatedJobId)}`
+      : '';
 
     const fileTypeForN8nValue = fileTypeForN8n(fileType, fileName);
     safeLog('[upload-session] file_type para n8n (V2-02-SW-Detect-File-Type):', fileTypeForN8nValue, '(original:', fileType + ')');
@@ -123,6 +141,11 @@ export async function POST(request: NextRequest) {
       content_type: fileTypeForN8nValue,
       mime_type: fileTypeForN8nValue,
       entity_type: 'upload',
+
+      /** Para el correo / deep link: debe usar el mismo upload_id que `ingestion_jobs` y `uploads`. */
+      mapping_url: mappingUrlForUploadId,
+      mapping_url_upload_id: mappingUrlForUploadId,
+      mapping_url_job_id: mappingUrlForJobId,
     };
 
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
@@ -201,21 +224,25 @@ export async function POST(request: NextRequest) {
     const fromN8n = typeof uploadIdRaw === 'string' ? uploadIdRaw.trim() : '';
     let upload_id = fromN8n || canonicalUploadId;
 
-    if (!fromN8n) {
-      safeLog('[upload-session] n8n no devolvió upload_id; persistiendo canonicalUploadId en uploads');
-      const { error: uploadInsertErr } = await supabaseServer.from('uploads').insert({
-        upload_id: canonicalUploadId,
+    /** Service role: siempre asegurar fila en `uploads` (evita carga infinita si n8n devolvió upload_id pero no insertó). */
+    const { error: uploadUpsertErr } = await supabaseServer.from('uploads').upsert(
+      {
+        upload_id,
         company_id: companyId,
         uploader_user_id: userId,
         file_name: fileName,
         file_type: fileType,
         declared_dataset_type: datasetType,
         status: 'pending',
-      });
-      if (uploadInsertErr) {
-        safeError('[upload-session] Error insertando uploads:', uploadInsertErr);
-        return createErrorResponse('No se pudo registrar el upload', 500, canonicalUploadId);
-      }
+      },
+      { onConflict: 'upload_id' },
+    );
+    if (uploadUpsertErr) {
+      safeError('[upload-session] Error upsert uploads (service role):', uploadUpsertErr);
+      return createErrorResponse('No se pudo registrar el upload en la base de datos', 500, upload_id);
+    }
+    if (!fromN8n) {
+      safeLog('[upload-session] n8n no devolvió upload_id; usando canonicalUploadId ya persistido en uploads');
     }
 
     const { error: insertErr } = await supabaseServer
@@ -232,6 +259,10 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('No se pudo registrar el job en ingestion_jobs', 500, canonicalUploadId);
     }
 
+    const resolvedMappingUrl = appBase
+      ? `${appBase}/ingestion/mapping/${encodeURIComponent(upload_id)}`
+      : '';
+
     safeLog('[upload-session] ← %d OK job_id=%s upload_id=%s', response.status, generatedJobId, upload_id);
     return createSuccessResponse(
       {
@@ -239,6 +270,7 @@ export async function POST(request: NextRequest) {
         correlation_id: upload_id,
         upload_id,
         signed_url: signedUrlAbsolute,
+        mapping_url: resolvedMappingUrl,
       },
       200,
       upload_id,

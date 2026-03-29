@@ -21,6 +21,9 @@ import {
 } from '@/lib/ingestionFileExtract';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
 
+/** Máx. espera del cliente al BFF (sesión / confirm → n8n) antes de error explícito de Timeout. */
+const N8N_WEBHOOK_CLIENT_TIMEOUT_MS = 10_000;
+
 interface SessionResponse {
   [key: string]: any;
 }
@@ -731,19 +734,21 @@ export default function IngestionPage() {
       jobIdRef.current = generatedJobId;
       setJobId(generatedJobId);
 
-      console.log('[handleCreateSession] Enviando request multipart a /api/workflows/upload-session:', {
+      const n8nPayloadLog = {
         company_id: finalCompanyId,
         user_id: finalUserId,
         job_id: generatedJobId,
         file_name: uploadFileName,
         file_type: sessionFileType,
-        dataset_type: detectedType,
+        dataset_type: normalizeDatasetType(detectedType),
         cluster_id: FIXED_CLUSTER_ID,
-      });
-      console.log('Enviando FormData con archivo de', uploadBlob.size, 'bytes');
+        file_bytes: uploadBlob.size,
+      };
+      console.log('Payload enviado a n8n:', n8nPayloadLog);
+      console.log('[handleCreateSession] Enviando request multipart a /api/workflows/upload-session:', n8nPayloadLog);
 
       const controller = new AbortController();
-      const uiTimeout = setTimeout(() => controller.abort(), 8_000);
+      const uiTimeout = setTimeout(() => controller.abort(), N8N_WEBHOOK_CLIENT_TIMEOUT_MS);
 
       let response: Response;
       try {
@@ -755,7 +760,9 @@ export default function IngestionPage() {
       } catch (fetchErr: any) {
         clearTimeout(uiTimeout);
         if (fetchErr?.name === 'AbortError') {
-          throw new Error('Conexión con n8n fallida — no hubo respuesta en 8 s. Verifica que el workflow esté activo.');
+          throw new Error(
+            'Timeout: el servidor / n8n no respondieron en 10 s. Revisa el workflow o vuelve a intentar.',
+          );
         }
         throw fetchErr;
       }
@@ -1026,17 +1033,23 @@ export default function IngestionPage() {
 
       const payloadJson = JSON.stringify(payload);
       console.log('[handleConfirm] V2-03 payload (solo 4 campos hacia n8n):', payloadJson);
+      console.log('Payload enviado a n8n:', payload);
 
       let dispatched = false;
 
-      try {
-        const sendConfirm = async () => fetch('/api/workflows/upload-confirm', {
+      const fetchConfirmOnce = () => {
+        const ac = new AbortController();
+        const to = setTimeout(() => ac.abort(), N8N_WEBHOOK_CLIENT_TIMEOUT_MS);
+        return fetch('/api/workflows/upload-confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
-        });
+          signal: ac.signal,
+        }).finally(() => clearTimeout(to));
+      };
 
-        let response = await sendConfirm();
+      try {
+        let response = await fetchConfirmOnce();
 
         console.log('[handleConfirm] Respuesta:', response.status, response.statusText);
         if (response.ok) {
@@ -1063,7 +1076,7 @@ export default function IngestionPage() {
               job_id: jobIdStr,
               correlation_id: correlationIdStr,
             });
-            response = await sendConfirm();
+            response = await fetchConfirmOnce();
             text = await response.text().catch(() => '');
             console.log('[handleConfirm] Retry único ->', response.status, response.statusText);
           }
@@ -1077,13 +1090,24 @@ export default function IngestionPage() {
           } catch {
             setConfirmResponse({ message: text || 'OK' });
           }
+          dispatched = true;
+        } else {
+          const errMsg = text || `Error HTTP ${response.status}`;
+          setErrorConfirm(errMsg);
+          setGlobalError(errMsg);
         }
-        // Cualquier respuesta (200, 202, 204, timeout parcial) = n8n recibió el request
-        dispatched = true;
-      } catch (networkErr) {
-        // Incluso un timeout de fetch puede significar que n8n ya está procesando
-        console.warn('[handleConfirm] Request falló (posible timeout), asumiendo dispatched:', networkErr);
-        dispatched = true;
+      } catch (networkErr: unknown) {
+        const isAbort =
+          networkErr instanceof Error &&
+          (networkErr.name === 'AbortError' || /abort/i.test(networkErr.message));
+        const msg = isAbort
+          ? 'Timeout: la confirmación a n8n tardó más de 10 s.'
+          : networkErr instanceof Error
+            ? networkErr.message
+            : 'Error de red al confirmar la carga';
+        console.error('[handleConfirm] Fallo de red / timeout:', networkErr);
+        setErrorConfirm(msg);
+        setGlobalError(msg);
       }
 
       if (dispatched) {
@@ -1164,19 +1188,52 @@ export default function IngestionPage() {
       const sessionDatasetType = preparedForSession?.wasJsonConverted ? 'needs' : datasetType;
 
       // Fase 1 (Session): pedir signed_url + IDs al proxy (JSON/JSONL ya convertidos a CSV en cliente)
+      const clientJobId = createClientJobId();
+      jobIdRef.current = clientJobId;
+      setJobId(clientJobId);
+      persistTrackingIds({ jobId: clientJobId });
+
       const formData = new FormData();
       formData.append('file', sessionFile, sessionFileName);
       formData.append('company_id', HARDCODED_COMPANY_ID);
       formData.append('user_id', HARDCODED_USER_ID);
+      formData.append('job_id', clientJobId);
       formData.append('file_name', sessionFileName);
       formData.append('file_type', sessionFileType);
       formData.append('dataset_type', normalizeDatasetType(sessionDatasetType));
       formData.append('cluster_id', FIXED_CLUSTER_ID);
 
-      const sessionResponse = await fetch('/api/workflows/upload-session', {
-        method: 'POST',
-        body: formData,
-      });
+      const n8nPayloadLog = {
+        company_id: HARDCODED_COMPANY_ID,
+        user_id: HARDCODED_USER_ID,
+        job_id: clientJobId,
+        file_name: sessionFileName,
+        file_type: sessionFileType,
+        dataset_type: normalizeDatasetType(sessionDatasetType),
+        cluster_id: FIXED_CLUSTER_ID,
+        file_bytes: sessionFile.size,
+      };
+      console.log('Payload enviado a n8n:', n8nPayloadLog);
+
+      const sessionAc = new AbortController();
+      const sessionTimer = setTimeout(() => sessionAc.abort(), N8N_WEBHOOK_CLIENT_TIMEOUT_MS);
+      let sessionResponse: Response;
+      try {
+        sessionResponse = await fetch('/api/workflows/upload-session', {
+          method: 'POST',
+          body: formData,
+          signal: sessionAc.signal,
+        });
+      } catch (e: unknown) {
+        clearTimeout(sessionTimer);
+        if (e instanceof Error && e.name === 'AbortError') {
+          throw new Error(
+            'Timeout: el servidor / n8n no respondieron en 10 s. Revisa el workflow o vuelve a intentar.',
+          );
+        }
+        throw e;
+      }
+      clearTimeout(sessionTimer);
 
       if (!sessionResponse.ok) {
         const errBody = await sessionResponse.json().catch(() => ({}));
@@ -1246,11 +1303,28 @@ export default function IngestionPage() {
         user_email: confirmEmail,
       };
       console.log('[handleUpload] upload-confirm V2-03 (4 campos, mismo job_id que sesión/ref)');
-      const confirmResponse = await fetch('/api/workflows/upload-confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(confirmPayload),
-      });
+      console.log('Payload enviado a n8n:', confirmPayload);
+
+      const confirmAc = new AbortController();
+      const confirmTimer = setTimeout(() => confirmAc.abort(), N8N_WEBHOOK_CLIENT_TIMEOUT_MS);
+      let confirmResponse: Response;
+      try {
+        confirmResponse = await fetch('/api/workflows/upload-confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(confirmPayload),
+          signal: confirmAc.signal,
+        });
+      } catch (e: unknown) {
+        clearTimeout(confirmTimer);
+        if (e instanceof Error && e.name === 'AbortError') {
+          throw new Error(
+            'Timeout: la confirmación a n8n tardó más de 10 s. Revisa el workflow o vuelve a intentar.',
+          );
+        }
+        throw e;
+      }
+      clearTimeout(confirmTimer);
 
       if (!confirmResponse.ok) {
         const errBody = await confirmResponse.json().catch(() => ({}));
