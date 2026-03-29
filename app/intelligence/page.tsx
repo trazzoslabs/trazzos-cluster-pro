@@ -5,6 +5,7 @@ import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
 import Synergy3DScene, { SceneLink, SceneNode } from './components/Synergy3DScene';
+import CartagenaExecutiveReport from './components/CartagenaExecutiveReport';
 import {
   Bar,
   BarChart,
@@ -96,7 +97,7 @@ interface AuditEvent {
   created_at: string | null;
 }
 
-type ViewMode = '3d' | 'analytics' | 'timeline';
+type ViewMode = '3d' | 'analytics' | 'timeline' | 'report';
 
 // Lista de empresas del cluster
 const COMPANIES = [
@@ -108,17 +109,6 @@ const COMPANIES = [
   'Cabot',
   'Dow',
 ];
-
-// Coordenadas de empresas
-const COMPANY_COORDINATES: { [key: string]: { name: string; lat: number; lng: number } } = {
-  'Reficar': { name: 'Reficar (Ecopetrol)', lat: 10.33, lng: -75.5 },
-  'Yara': { name: 'Yara Colombia', lat: 10.32, lng: -75.51 },
-  'Argos': { name: 'Argos - Planta Cartagena', lat: 10.34, lng: -75.49 },
-  'Ajover': { name: 'Ajover S.A.', lat: 10.3972, lng: -75.4870 },
-  'Esenttia': { name: 'Esenttia', lat: 10.3084, lng: -75.5179 },
-  'Cabot': { name: 'Cabot Colombiana', lat: 10.3049, lng: -75.5230 },
-  Dow: { name: 'Dow Chemical Mamonal', lat: 10.315, lng: -75.505 },
-};
 
 export default function IntelligencePage() {
   const [activeMode, setActiveMode] = useState<ViewMode>('analytics');
@@ -779,6 +769,29 @@ export default function IntelligencePage() {
                 </svg>
               )
             },
+            {
+              id: 'report' as ViewMode,
+              label: 'Informe',
+              icon: (
+                <svg
+                  className="w-4 h-4"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <line x1="10" y1="9" x2="8" y2="9" />
+                </svg>
+              ),
+            },
           ].map((mode) => (
             <button
               key={mode.id}
@@ -1144,6 +1157,12 @@ export default function IntelligencePage() {
                 </div>
               </div>
             </SectionCard>
+          )}
+
+          {activeMode === 'report' && (
+            <div className="pt-1">
+              <CartagenaExecutiveReport />
+            </div>
           )}
         </>
       )}
