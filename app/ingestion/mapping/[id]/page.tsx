@@ -3,8 +3,22 @@
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { AUTH_BYPASS_USER_ID } from '@/lib/authBypass';
 import PageTitle from '../../../components/ui/PageTitle';
-import IngestionMappingWorkflow from '../../components/IngestionMappingWorkflow';
+import IngestionMappingWorkflow, {
+  type IngestionJobMappingSnapshot,
+} from '../../components/IngestionMappingWorkflow';
+
+/** Demo Cartagena: sin consulta a Supabase; columnas típicas Reficar. */
+const CARTAGENA_DEMO_SNAPSHOT: IngestionJobMappingSnapshot = {
+  job_id: AUTH_BYPASS_USER_ID,
+  upload_id: AUTH_BYPASS_USER_ID,
+  mapping_profile_id: null,
+  status: 'ready',
+  dataset_type: 'needs',
+  file_name: 'ingesta_cluster_cartagena.xlsx',
+  source_columns: ['material', 'cantidad', 'fecha', 'planta'],
+};
 
 function normalizeMappingRouteId(raw: string | string[] | undefined): string | undefined {
   if (raw == null) return undefined;
@@ -63,6 +77,12 @@ export default function IngestionMappingPage() {
   useEffect(() => {
     if (!id) {
       setPhase('not-found');
+      return;
+    }
+
+    if (id === AUTH_BYPASS_USER_ID) {
+      setResolvedJobId(id);
+      setPhase('ready');
       return;
     }
 
@@ -157,7 +177,11 @@ export default function IngestionMappingPage() {
           ← Volver a Jobs
         </Link>
       </div>
-      <IngestionMappingWorkflow jobId={resolvedJobId} showBackToJobsLink={false} />
+      <IngestionMappingWorkflow
+        jobId={resolvedJobId}
+        initialJob={resolvedJobId === AUTH_BYPASS_USER_ID ? CARTAGENA_DEMO_SNAPSHOT : undefined}
+        showBackToJobsLink={false}
+      />
     </div>
   );
 }

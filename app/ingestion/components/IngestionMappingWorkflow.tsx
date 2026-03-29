@@ -20,6 +20,8 @@ export interface IngestionJobMappingSnapshot {
   dataset_type?: string | null;
   /** Reservado si el backend expone columnas; hoy suele faltar y el cliente lee el archivo. */
   source_columns?: string[] | null;
+  /** Solo UI / demo Cartagena */
+  file_name?: string | null;
 }
 
 interface StagingColumn {
@@ -84,11 +86,23 @@ function getRequiredFields(type: string | null): string[] {
   return [];
 }
 
-function suggestTargetField(sourceColumn: string, type: string | null): string {
+function suggestTargetField(sourceColumn: string, type: string | null, jobId?: string): string {
   const normalized = sourceColumn.trim().toLowerCase().replace(/\s+/g, '_');
   const schemaKey = schemaKeyForDatasetType(type) ?? '';
+  // Demo Cartagena (4 columnas): planta → company_id para cubrir el mínimo de envío sin columna empresa.
+  if (
+    jobId?.trim() === AUTH_BYPASS_USER_ID &&
+    schemaKey === 'needs' &&
+    normalized === 'planta'
+  ) {
+    return 'company_id';
+  }
 
   const needsMap: Record<string, string> = {
+    material: 'item_name',
+    cantidad: 'quantity',
+    fecha: 'required_by_date',
+    planta: 'site_id',
     company_id: 'company_id',
     company: 'company_id',
     empresa: 'company_id',
@@ -108,7 +122,6 @@ function suggestTargetField(sourceColumn: string, type: string | null): string {
     especificaciones: 'specs',
     quantity: 'quantity',
     cant: 'quantity',
-    cantidad: 'quantity',
     qty: 'quantity',
     uom: 'uom',
     unit: 'uom',
@@ -162,6 +175,16 @@ function suggestTargetField(sourceColumn: string, type: string | null): string {
 function jobHasDbColumnMetadata(job: IngestionJobMappingSnapshot | null): boolean {
   const cols = job?.source_columns;
   return Array.isArray(cols) && cols.length > 0;
+}
+
+/** Demo: URL /ingestion/mapping/2222… sin fila en Supabase. */
+function isCartagenaBypassJob(jobId: string): boolean {
+  return jobId.trim() === AUTH_BYPASS_USER_ID;
+}
+
+function mappingWorkflowAllowed(job: IngestionJobMappingSnapshot, jobId: string): boolean {
+  if (isCartagenaBypassJob(jobId)) return true;
+  return job.status?.toLowerCase() === 'awaiting_mapping';
 }
 
 function mapApplyErrorToUserMessage(err: unknown, fallback: string): string {
@@ -341,7 +364,9 @@ export default function IngestionMappingWorkflow({
   }, [jobId]);
 
   useEffect(() => {
-    if (job?.status?.toLowerCase() !== 'awaiting_mapping' || !jobId) return;
+    if (!jobId) return;
+    if (!mappingWorkflowAllowed(job as IngestionJobMappingSnapshot, jobId)) return;
+    if (!job) return;
 
     let cancelled = false;
     const storageKey = trazzosMappingSourceColumnsStorageKey(jobId);
@@ -425,7 +450,7 @@ export default function IngestionMappingWorkflow({
     return () => {
       cancelled = true;
     };
-  }, [job?.status, job?.source_columns, jobId, localFile]);
+  }, [job, job?.status, job?.source_columns, jobId, localFile]);
 
   const datasetType = selectedDatasetType;
   const targetFields = getTargetFields(datasetType);
@@ -459,7 +484,7 @@ export default function IngestionMappingWorkflow({
     autoMatchAppliedRef.current = true;
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType);
+      const target = suggestTargetField(col.source_column, datasetType, jobId);
       if (target) suggested[col.source_column] = target;
     });
     if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
@@ -499,7 +524,7 @@ export default function IngestionMappingWorkflow({
   const applySuggestedAutoMatch = () => {
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType);
+      const target = suggestTargetField(col.source_column, datasetType, jobId);
       if (target) suggested[col.source_column] = target;
     });
     if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
@@ -524,7 +549,7 @@ export default function IngestionMappingWorkflow({
   const handleAutoMatch = () => {
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType);
+      const target = suggestTargetField(col.source_column, datasetType, jobId);
       if (target) suggested[col.source_column] = target;
     });
     setColumnMapping((prev) => ({ ...suggested, ...prev }));
@@ -684,7 +709,7 @@ export default function IngestionMappingWorkflow({
     );
   }
 
-  if (job.status?.toLowerCase() !== 'awaiting_mapping') {
+  if (!mappingWorkflowAllowed(job, jobId)) {
     return (
       <SectionCard
         title="Mapeo no disponible"
@@ -734,7 +759,11 @@ export default function IngestionMappingWorkflow({
 
       <SectionCard
         title="Mapeo de columnas (requerido)"
-        description="Asigna cada columna detectada a un campo destino del esquema"
+        description={
+          isCartagenaBypassJob(jobId) && job.file_name
+            ? `Demo Cartagena — ${job.file_name}. Asigna cada columna detectada a un campo destino del esquema.`
+            : 'Asigna cada columna detectada a un campo destino del esquema'
+        }
         className="mb-6 border-[#9aff8d]/30"
       >
         {stagingColumns.length === 0 && (localExtracting || loadingColumns) ? (
