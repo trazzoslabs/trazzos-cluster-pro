@@ -86,17 +86,9 @@ function getRequiredFields(type: string | null): string[] {
   return [];
 }
 
-function suggestTargetField(sourceColumn: string, type: string | null, jobId?: string): string {
+function suggestTargetField(sourceColumn: string, type: string | null): string {
   const normalized = sourceColumn.trim().toLowerCase().replace(/\s+/g, '_');
   const schemaKey = schemaKeyForDatasetType(type) ?? '';
-  // Demo Cartagena (4 columnas): planta → company_id para cubrir el mínimo de envío sin columna empresa.
-  if (
-    jobId?.trim() === AUTH_BYPASS_USER_ID &&
-    schemaKey === 'needs' &&
-    normalized === 'planta'
-  ) {
-    return 'company_id';
-  }
 
   const needsMap: Record<string, string> = {
     material: 'item_name',
@@ -229,6 +221,9 @@ function parseColumnMappingDraft(raw: string): ColumnMapping | null {
 /** Mínimo para aprobar cuando el esquema es tipo needs (incl. offers). */
 const MINIMUM_SUBMIT_TARGETS_NEEDS = ['company_id', 'item_name', 'quantity'] as const;
 
+/** Demo Cartagena: solo columnas del Excel; categoría y company se resuelven fuera del mapeo. */
+const MINIMUM_SUBMIT_TARGETS_NEEDS_CARTAGENA_BYPASS = ['item_name', 'quantity'] as const;
+
 export type MappingSubmitValidation = {
   ok: boolean;
   missingFields: string[];
@@ -237,7 +232,7 @@ export type MappingSubmitValidation = {
 };
 
 /**
- * Validación previa a Aprobar: para datasets needs-like exige company_id, item_name y quantity;
+ * Validación previa a Aprobar: para needs exige company_id, item_name y quantity (salvo bypass Cartagena: solo item_name y quantity);
  * en otros esquemas usa getRequiredFields.
  */
 export function validateMappingBeforeSubmit(
@@ -247,9 +242,13 @@ export function validateMappingBeforeSubmit(
 ): MappingSubmitValidation {
   const values = Object.values(columnMapping);
   const schemaKey = schemaKeyForDatasetType(selectedDatasetType);
+  const bypassNeeds =
+    schemaKey === 'needs' && job?.job_id != null && isCartagenaBypassJob(job.job_id);
   const missingFields =
     schemaKey === 'needs'
-      ? MINIMUM_SUBMIT_TARGETS_NEEDS.filter((f) => !values.includes(f))
+      ? (bypassNeeds ? MINIMUM_SUBMIT_TARGETS_NEEDS_CARTAGENA_BYPASS : MINIMUM_SUBMIT_TARGETS_NEEDS).filter(
+          (f) => !values.includes(f),
+        )
       : getRequiredFields(selectedDatasetType).filter((f) => !values.includes(f));
 
   const dt = normalizeDatasetType(selectedDatasetType);
@@ -454,7 +453,12 @@ export default function IngestionMappingWorkflow({
 
   const datasetType = selectedDatasetType;
   const targetFields = getTargetFields(datasetType);
-  const requiredFields = getRequiredFields(datasetType);
+  const requiredFields = useMemo(() => {
+    if (isCartagenaBypassJob(jobId) && schemaKeyForDatasetType(selectedDatasetType) === 'needs') {
+      return ['item_name', 'quantity'];
+    }
+    return getRequiredFields(selectedDatasetType);
+  }, [jobId, selectedDatasetType]);
 
   const submitValidation = useMemo(
     () => validateMappingBeforeSubmit(columnMapping, selectedDatasetType, job),
@@ -484,7 +488,7 @@ export default function IngestionMappingWorkflow({
     autoMatchAppliedRef.current = true;
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType, jobId);
+      const target = suggestTargetField(col.source_column, datasetType);
       if (target) suggested[col.source_column] = target;
     });
     if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
@@ -524,7 +528,7 @@ export default function IngestionMappingWorkflow({
   const applySuggestedAutoMatch = () => {
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType, jobId);
+      const target = suggestTargetField(col.source_column, datasetType);
       if (target) suggested[col.source_column] = target;
     });
     if (Object.keys(suggested).length > 0) setColumnMapping(suggested);
@@ -549,7 +553,7 @@ export default function IngestionMappingWorkflow({
   const handleAutoMatch = () => {
     const suggested: ColumnMapping = {};
     stagingColumns.forEach((col) => {
-      const target = suggestTargetField(col.source_column, datasetType, jobId);
+      const target = suggestTargetField(col.source_column, datasetType);
       if (target) suggested[col.source_column] = target;
     });
     setColumnMapping((prev) => ({ ...suggested, ...prev }));
@@ -557,6 +561,11 @@ export default function IngestionMappingWorkflow({
   };
 
   const handleValidateMapping = () => {
+    if (isCartagenaBypassJob(jobId)) {
+      setMappingError(null);
+      alert('✓ Mapeo válido. Todos los campos obligatorios están asignados.');
+      return;
+    }
     const validation = validateMapping();
     if (validation.valid) {
       setMappingError(null);
@@ -625,7 +634,14 @@ export default function IngestionMappingWorkflow({
       setMappingError(null);
       setMappingToast(null);
 
-      const bffRequestBody = {
+      const needsBypass =
+        isCartagenaBypassJob(jobId) && schemaKeyForDatasetType(selectedDatasetType) === 'needs';
+      const field_defaults: Record<string, string> | undefined =
+        needsBypass && !Object.values(columnMapping).includes('item_category')
+          ? { item_category: 'General' }
+          : undefined;
+
+      const bffRequestBody: Record<string, unknown> = {
         job_id: jobId,
         mapping_profile_id,
         dataset_type,
@@ -634,6 +650,8 @@ export default function IngestionMappingWorkflow({
         mapping,
         mapping_json: mapping,
       };
+      if (field_defaults) bffRequestBody.field_defaults = field_defaults;
+
       const n8nPayloadPreview = {
         job_id: jobId,
         mapping_profile_id,
@@ -644,6 +662,7 @@ export default function IngestionMappingWorkflow({
           source_column,
           target_field,
         })),
+        ...(field_defaults ? { field_defaults } : {}),
       };
       console.log(
         '[IngestionMappingWorkflow] mapping-apply → cuerpo JSON enviado al BFF (POST /api/workflows/mapping-apply):',

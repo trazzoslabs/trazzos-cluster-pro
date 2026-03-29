@@ -191,6 +191,18 @@ export async function POST(request: NextRequest) {
       : String(upload.company_id ?? AUTH_BYPASS_COMPANY_ID);
     const userIdForN8n = isValidUuid(bodyUserRaw) ? bodyUserRaw : AUTH_BYPASS_USER_ID;
 
+    const fdRaw = body.field_defaults;
+    let field_defaults: Record<string, string> | undefined;
+    if (fdRaw && typeof fdRaw === 'object' && !Array.isArray(fdRaw)) {
+      const acc: Record<string, string> = {};
+      for (const [k, v] of Object.entries(fdRaw as Record<string, unknown>)) {
+        const key = String(k).trim();
+        const val = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+        if (key && val) acc[key] = val;
+      }
+      if (Object.keys(acc).length > 0) field_defaults = acc;
+    }
+
     /** Contrato n8n: lista de pares + tenant/usuario (alineado con ingestion / profiles). */
     const n8nPayload = {
       job_id,
@@ -199,6 +211,7 @@ export async function POST(request: NextRequest) {
       company_id: companyIdForN8n,
       user_id: userIdForN8n,
       mapping: pairs,
+      ...(field_defaults ? { field_defaults } : {}),
     };
 
     const url = N8N_MAPPING_APPLY_URL || `${N8N_WEBHOOK_BASE}/api/mapping/apply`;
