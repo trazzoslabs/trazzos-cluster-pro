@@ -367,10 +367,12 @@ function GraphScene({
 
   const linksToRender = sessionDemoActive ? sessionTriangleLinks : [];
 
+  const bg = sessionDemoActive ? '#000000' : industrialDemoMode ? '#070d14' : '#111418';
+
   return (
     <>
-      <color attach="background" args={[industrialDemoMode ? '#070d14' : '#111418']} />
-      <fog attach="fog" args={[industrialDemoMode ? '#070d14' : '#111418', 12, 42]} />
+      <color attach="background" args={[bg]} />
+      <fog attach="fog" args={[bg, sessionDemoActive ? 14 : 12, sessionDemoActive ? 48 : 42]} />
       {industrialDemoMode ? <IndustrialEcosystemShell /> : null}
       <Starfield count={industrialDemoMode ? 320 : sessionDemoActive ? 900 : 280} />
 
@@ -457,9 +459,9 @@ function GraphScene({
       <Environment preset="night" />
       <EffectComposer>
         <Bloom
-          intensity={sessionDemoActive ? 1.55 : 0.75}
-          luminanceThreshold={sessionDemoActive ? 0.12 : 0.22}
-          luminanceSmoothing={0.28}
+          intensity={sessionDemoActive ? 1.95 : 0.75}
+          luminanceThreshold={sessionDemoActive ? 0.085 : 0.22}
+          luminanceSmoothing={0.32}
           mipmapBlur
         />
       </EffectComposer>
@@ -486,7 +488,11 @@ export default function Synergy3DScene({
   sessionDemoActive?: boolean;
 }) {
   return (
-    <div className="h-[600px] bg-[#111418] rounded-lg overflow-hidden border border-zinc-700">
+    <div
+      className={`h-[600px] rounded-lg overflow-hidden border border-zinc-700 ${
+        sessionDemoActive ? 'bg-black' : 'bg-[#111418]'
+      }`}
+    >
       <Canvas camera={{ position: [0, 4.8, 10], fov: 47 }} onPointerMissed={() => onNodeSelect(null)}>
         <GraphScene
           nodes={nodes}

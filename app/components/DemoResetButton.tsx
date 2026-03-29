@@ -40,7 +40,7 @@ export default function DemoResetButton() {
         } catch {
           /* noop */
         }
-        window.location.reload();
+        window.location.href = '/';
       }}
       className="fixed bottom-4 left-4 z-[90] rounded-md border border-zinc-600/80 bg-zinc-900/90 px-3 py-1.5 text-xs font-medium text-zinc-300 shadow-lg backdrop-blur-sm hover:border-zinc-500 hover:bg-zinc-800 hover:text-white transition-colors"
     >

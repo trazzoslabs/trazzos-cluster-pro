@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { isDemoActive } from '@/lib/cartagenaDemoSynergies';
+import { getCartagenaDemoSynergyDashboardStats, isDemoActive } from '@/lib/cartagenaDemoSynergies';
 import PageTitle from './components/ui/PageTitle';
 import SectionCard from './components/ui/SectionCard';
 import StatusBadge from './components/ui/StatusBadge';
@@ -49,9 +49,10 @@ export default function Home() {
   useEffect(() => {
     const syncDemoSynergyMetrics = () => {
       if (isDemoActive()) {
-        setTotalSynergies(4);
-        setActiveSynergies(4);
-        setAvgSynergySavingsPct(16.5);
+        const s = getCartagenaDemoSynergyDashboardStats();
+        setTotalSynergies(s.total);
+        setActiveSynergies(s.activeInPipeline);
+        setAvgSynergySavingsPct(s.avgSavingsPct);
       } else {
         setTotalSynergies(0);
         setActiveSynergies(0);

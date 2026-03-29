@@ -11,9 +11,9 @@ if (typeof window !== 'undefined') {
   mapboxgl = require('mapbox-gl');
 }
 
-/** Coordenadas de referencia Reficar (Cartagena / zona industrial). */
-export const REFICAR_MAP_LAT = 10.3205;
-export const REFICAR_MAP_LNG = -75.4952;
+/** Coordenadas de referencia Reficar (Mamonal / Cartagena). */
+export const REFICAR_MAP_LAT = 10.33;
+export const REFICAR_MAP_LNG = -75.5;
 const REFICAR_COORD_EPS = 0.035;
 
 /** UUID sandbox Reficar (ingesta fija). */
