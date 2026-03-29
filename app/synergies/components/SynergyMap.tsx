@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Mapa geoespacial del cluster (sinergias + empresas) usado en el Centro de Inteligencia Visual.
+ * Mapa geoespacial del cluster (sinergias + empresas).
  * La implementación vive en `app/components/geo/GeoMap.tsx`; este módulo es el punto de entrada
  * pedido para la vista de sinergias / inteligencia.
  */

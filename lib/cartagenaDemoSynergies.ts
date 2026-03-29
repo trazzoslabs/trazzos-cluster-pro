@@ -30,7 +30,7 @@ export function getCartagenaDemoEstimatedSavingsUsd(): number {
   return Math.round(CARTAGENA_DEMO_CONSOLIDATED_USD * (CARTAGENA_DEMO_AVG_SAVINGS_PCT / 100));
 }
 
-/** Pines Mamonal (Cartagena) para vista geoespacial en demo activa. */
+/** Pines Mamonal (Cartagena) — útiles si se reutiliza un mapa (p. ej. ruta dedicada); no usados en /intelligence. */
 export function getCartagenaDemoGeoPins(): Array<{
   id: string;
   name: string;

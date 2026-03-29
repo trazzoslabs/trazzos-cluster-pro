@@ -1,12 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import dynamic from 'next/dynamic';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
 import StatusBadge from '../components/ui/StatusBadge';
-import MapboxLoader from '../components/geo/MapboxLoader';
-import GeoSidebar from '../components/geo/GeoSidebar';
 import Synergy3DScene, { SceneLink, SceneNode } from './components/Synergy3DScene';
 import {
   Bar,
@@ -26,26 +23,12 @@ import {
   YAxis,
 } from 'recharts';
 
-// Mapa del cluster (SynergyMap → GeoMap) sin SSR
-const SynergyMap = dynamic(() => import('../synergies/components/SynergyMap'), {
-  ssr: false,
-  loading: () => (
-    <div className="h-[600px] bg-black/50 rounded-lg border border-zinc-800 flex items-center justify-center">
-      <div className="text-center">
-        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#9aff8d]"></div>
-        <p className="text-zinc-400 mt-4">Cargando mapa...</p>
-      </div>
-    </div>
-  ),
-});
-
 import type { CompaniesInvolvedJson, VolumeTotalJsonValue } from '@/lib/types/synergies';
 import { companyEntryId, companyEntryName, extractVolumeTotal } from '@/lib/types/synergies';
 import {
   getCartagenaDemoConsolidatedUsdTotal,
   getCartagenaDemoDonutData,
   getCartagenaDemoEstimatedSavingsUsd,
-  getCartagenaDemoGeoPins,
   getCartagenaDemoSynergyRows,
   isCartagenaBypassCompanyId,
   isDemoActive,
@@ -113,7 +96,7 @@ interface AuditEvent {
   created_at: string | null;
 }
 
-type ViewMode = '3d' | 'analytics' | 'timeline' | 'geospatial';
+type ViewMode = '3d' | 'analytics' | 'timeline';
 
 // Lista de empresas del cluster
 const COMPANIES = [
@@ -150,26 +133,9 @@ export default function IntelligencePage() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [needs, setNeeds] = useState<Need[]>([]);
-  const [geoCompanies, setGeoCompanies] = useState<any[]>([]);
-  const [geoSelectedCompanyId, setGeoSelectedCompanyId] = useState<string | null>(null);
-  const [showConnections, setShowConnections] = useState(true);
   const [profileCompanyId, setProfileCompanyId] = useState<string | null>(null);
   const [sessionDemoLive, setSessionDemoLive] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  /** Estados de empresas para el mapa (mv_cluster / company_sites). */
-  const refreshCompaniesGeo = useCallback(async (reason: string) => {
-    try {
-      const geoRes = await fetch('/api/data/companies-geo');
-      if (!geoRes.ok) return;
-      const geoData = await geoRes.json();
-      const list = geoData.data || [];
-      console.log(`[Intelligence] companies-geo (${reason}):`, list.length, 'empresas');
-      setGeoCompanies(list);
-    } catch {
-      // refresco en segundo plano
-    }
-  }, []);
 
   useEffect(() => {
     loadData();
@@ -182,37 +148,7 @@ export default function IntelligencePage() {
     return () => window.removeEventListener('focus', sync);
   }, []);
 
-  // Polling solo en pestaña geoespacial: se limpia al cambiar de pestaña
-  useEffect(() => {
-    if (activeMode !== 'geospatial') return;
-
-    const tick = async () => {
-      await refreshCompaniesGeo('interval');
-      try {
-        if (isCartagenaBypassCompanyId(profileCompanyId)) {
-          setSynergies(getCartagenaDemoSynergyRows() as unknown as Synergy[]);
-          return;
-        }
-        const synUrl = profileCompanyId
-          ? `/api/data/synergies?company_id=${encodeURIComponent(profileCompanyId)}`
-          : '/api/data/synergies';
-        const synRes = await fetch(synUrl);
-        if (synRes.ok) {
-          const synData = await synRes.json();
-          setSynergies(synData.data || []);
-        }
-      } catch {
-        /* silenciar */
-      }
-    };
-
-    void tick();
-    const intervalId = setInterval(tick, 30_000);
-    return () => clearInterval(intervalId);
-  }, [activeMode, refreshCompaniesGeo, profileCompanyId]);
-
-  // Escucha activa: `marts_refresh_completed` vía BroadcastChannel (mismo origen), p. ej. tras refresh en Ingesta.
-  // Sin recargar la página: actualiza datos del mapa geoespacial.
+  // Escucha activa: `marts_refresh_completed` vía BroadcastChannel (p. ej. tras refresh en Ingesta).
   useEffect(() => {
     let bc: BroadcastChannel | null = null;
 
@@ -224,8 +160,25 @@ export default function IntelligencePage() {
           event.data && typeof event.data === 'object' && event.data !== null
             ? (event.data as { counts?: unknown }).counts
             : undefined;
-        console.log('[Intelligence] marts_refresh_completed → companies-geo', extra);
-        void refreshCompaniesGeo('broadcast');
+        console.log('[Intelligence] marts_refresh_completed → synergies', extra);
+        void (async () => {
+          try {
+            if (isCartagenaBypassCompanyId(profileCompanyId)) {
+              setSynergies(getCartagenaDemoSynergyRows() as unknown as Synergy[]);
+              return;
+            }
+            const synUrl = profileCompanyId
+              ? `/api/data/synergies?company_id=${encodeURIComponent(profileCompanyId)}`
+              : '/api/data/synergies';
+            const synRes = await fetch(synUrl);
+            if (synRes.ok) {
+              const synData = await synRes.json();
+              setSynergies(synData.data || []);
+            }
+          } catch {
+            /* silenciar */
+          }
+        })();
       };
     } catch {
       /* BroadcastChannel no disponible */
@@ -238,7 +191,7 @@ export default function IntelligencePage() {
         /* noop */
       }
     };
-  }, [refreshCompaniesGeo]);
+  }, [profileCompanyId]);
 
   const loadData = async () => {
     try {
@@ -260,11 +213,10 @@ export default function IntelligencePage() {
       setProfileCompanyId(companyId);
       const cartagenaBypass = isCartagenaBypassCompanyId(companyId);
 
-      const [rfpsRes, posRes, decisionsRes, companiesGeoRes, auditRes, needsRes] = await Promise.all([
+      const [rfpsRes, posRes, decisionsRes, auditRes, needsRes] = await Promise.all([
         fetch('/api/data/rfps'),
         fetch('/api/data/purchase-orders'),
         fetch('/api/data/committee-decisions'),
-        fetch('/api/data/companies-geo'),
         fetch('/api/data/audit-events?limit=30'),
         fetch('/api/data/needs'),
       ]);
@@ -286,21 +238,13 @@ export default function IntelligencePage() {
       const rfpsData = await rfpsRes.json();
       const posData = await posRes.json();
       const decisionsData = await decisionsRes.json();
-      const companiesGeoData = await companiesGeoRes.json();
       const auditData = await auditRes.json();
       const needsData = needsRes.ok ? await needsRes.json() : { data: [] };
-
-      console.log('[Intelligence] companies-geo response:', {
-        status: companiesGeoRes.status,
-        count: companiesGeoData.data?.length ?? 0,
-        sample: companiesGeoData.data?.slice(0, 2),
-      });
 
       setSynergies(synergiesList);
       setRfps(rfpsData.data || []);
       setPurchaseOrders(posData.data || []);
       setDecisions(decisionsData.data || []);
-      setGeoCompanies(companiesGeoData.data || []);
       setAuditEvents(auditData.data || []);
       setNeeds(needsData.data || []);
 
@@ -657,8 +601,6 @@ export default function IntelligencePage() {
       });
   }, [sessionDemoLive, synergies]);
 
-  const companiesForGeoMap = sessionDemoLive ? getCartagenaDemoGeoPins() : geoCompanies;
-
   const renderDonutLabel = useCallback(
     (props: {
       cx?: number;
@@ -834,15 +776,6 @@ export default function IntelligencePage() {
               icon: (
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-              )
-            },
-            { 
-              id: 'geospatial' as ViewMode, 
-              label: 'Vista Geoespacial',
-              icon: (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                 </svg>
               )
             },
@@ -1211,72 +1144,6 @@ export default function IntelligencePage() {
                 </div>
               </div>
             </SectionCard>
-          )}
-
-          {/* Modo 5: Vista Geoespacial 3D */}
-          {activeMode === 'geospatial' && (
-            <div className="space-y-4">
-              <MapboxLoader />
-              
-              {/* Controles */}
-              <SectionCard title="" description="">
-                <div className="flex flex-wrap gap-4 items-center">
-                  {/* Toggle Conexiones */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="show-connections-geo"
-                      checked={showConnections}
-                      onChange={(e) => setShowConnections(e.target.checked)}
-                      className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-[#9aff8d] focus:ring-[#9aff8d]/50"
-                    />
-                    <label htmlFor="show-connections-geo" className="text-sm text-zinc-400 cursor-pointer">
-                      Mostrar conexiones
-                    </label>
-                  </div>
-
-                  {/* Botón Reset */}
-                  <button
-                    onClick={() => setGeoSelectedCompanyId(null)}
-                    className="px-4 py-1.5 bg-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-colors border border-zinc-700"
-                  >
-                    Reset Vista
-                  </button>
-                </div>
-              </SectionCard>
-
-              {/* Mapa */}
-              <SectionCard title="Vista Geoespacial 3D" description="Explora el cluster desde una perspectiva geoespacial">
-                <div className="h-[600px] relative">
-                  <SynergyMap
-                    companies={companiesForGeoMap}
-                    selectedCompanyId={geoSelectedCompanyId}
-                    onCompanySelect={setGeoSelectedCompanyId}
-                    is3DMode={true}
-                    showConnections={showConnections}
-                    synergies={synergies}
-                  />
-                </div>
-              </SectionCard>
-
-              {/* Sidebar */}
-              {geoSelectedCompanyId && (
-                <GeoSidebar
-                  company={companiesForGeoMap.find((c) => c.id === geoSelectedCompanyId) || null}
-                  onClose={() => setGeoSelectedCompanyId(null)}
-                  onViewSynergies={() => setActiveMode('3d')}
-                  onViewDetail={() => {
-                    if (geoSelectedCompanyId) {
-                      setActiveMode('3d');
-                      const company = companiesForGeoMap.find((c) => c.id === geoSelectedCompanyId);
-                      if (company) {
-                        setSelectedCompanyId(company.name);
-                      }
-                    }
-                  }}
-                />
-              )}
-            </div>
           )}
         </>
       )}
