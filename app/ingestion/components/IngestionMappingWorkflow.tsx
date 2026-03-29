@@ -297,9 +297,10 @@ export default function IngestionMappingWorkflow({
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
   const [applyingMapping, setApplyingMapping] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
-  const [mappingToast, setMappingToast] = useState<{ message: string; variant: 'error' } | null>(
-    null,
-  );
+  const [mappingToast, setMappingToast] = useState<{
+    message: string;
+    variant: 'error' | 'success';
+  } | null>(null);
   const autoMatchAppliedRef = useRef(false);
   const localDraftCheckedRef = useRef(false);
 
@@ -617,6 +618,32 @@ export default function IngestionMappingWorkflow({
       return;
     }
 
+    /** Demo Cartagena: no hay job en Supabase; evitar POST /api/workflows/mapping-apply. */
+    if (isCartagenaBypassJob(jobId)) {
+      setMappingError(null);
+      setApplyingMapping(true);
+      setMappingToast({
+        variant: 'success',
+        message: '¡Mapeo aplicado exitosamente para el Cluster Cartagena!',
+      });
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem(trazzosMappingSourceColumnsStorageKey(jobId));
+          localStorage.removeItem(mappingColumnDraftStorageKey(jobId));
+        } catch {
+          /* noop */
+        }
+        window.setTimeout(() => {
+          setApplyingMapping(false);
+          router.push('/synergies');
+        }, 1400);
+      } else {
+        setApplyingMapping(false);
+        router.push('/synergies');
+      }
+      return;
+    }
+
     const dataset_type = normalizeDatasetType(selectedDatasetType);
 
     const mapping_profile_id =
@@ -762,6 +789,15 @@ export default function IngestionMappingWorkflow({
           >
             Cerrar
           </button>
+        </div>
+      )}
+      {mappingToast && mappingToast.variant === 'success' && (
+        <div
+          role="status"
+          className="fixed bottom-4 right-4 z-[100] max-w-md rounded-lg border border-emerald-600/80 bg-emerald-950/95 px-4 py-3 text-sm text-emerald-50 shadow-lg"
+        >
+          <p className="font-semibold text-[#9aff8d]">Listo</p>
+          <p className="mt-1 text-emerald-100/95">{mappingToast.message}</p>
         </div>
       )}
 
