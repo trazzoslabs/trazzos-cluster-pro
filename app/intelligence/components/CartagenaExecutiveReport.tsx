@@ -79,10 +79,10 @@ export default function CartagenaExecutiveReport() {
 
       <div className="space-y-8 px-6 py-8">
         {!live ? (
-          <div className="rounded-lg border border-zinc-700/80 bg-zinc-950/40 px-5 py-6 text-center">
-            <p className="text-sm text-zinc-400 leading-relaxed max-w-lg mx-auto">
-              El contenido del informe ejecutivo de la demo Cartagena se muestra cuando la sesión de demostración está
-              activa. Active la demo desde el flujo de mapeo (bypass) y vuelva a esta pestaña.
+          <div className="rounded-lg border border-zinc-700/80 bg-zinc-950/40 px-5 py-10 text-center">
+            <p className="text-sm font-medium text-zinc-300 animate-pulse">Generando informe…</p>
+            <p className="text-xs text-zinc-500 mt-3 max-w-md mx-auto leading-relaxed">
+              Active la sesión de demostración desde el flujo de mapeo para ver el informe ejecutivo del cluster Mamonal.
             </p>
           </div>
         ) : (

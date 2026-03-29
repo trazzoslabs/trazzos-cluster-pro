@@ -474,19 +474,30 @@ export default function IntelligencePage() {
     };
   };
 
-  // Calcular métricas basadas en volume_total_json de synergies (tipado en lib/types/synergies)
-  const totalVolume = sessionDemoLive
-    ? getCartagenaDemoConsolidatedUsdTotal()
-    : synergies.reduce((sum, s) => sum + extractVolumeTotal(s.volume_total_json), 0);
-  const totalSavings = sessionDemoLive
-    ? getCartagenaDemoEstimatedSavingsUsd()
-    : totalVolume > 0
-      ? Math.round(totalVolume * 0.12) // estimación conservadora 12 % consolidación
+  /** Solo con sesión demo activa: alimenta Análisis Estratégico (KPIs, barras, donut). */
+  const analyticsSynergies = useMemo((): Synergy[] => {
+    if (!sessionDemoLive) return [];
+    return getCartagenaDemoSynergyRows() as unknown as Synergy[];
+  }, [sessionDemoLive]);
+
+  // Métricas para vista 3D y resto (datos cargados por API / bypass de empresa)
+  const totalVolume = synergies.reduce((sum, s) => sum + extractVolumeTotal(s.volume_total_json), 0);
+  const totalSavings =
+    totalVolume > 0
+      ? Math.round(totalVolume * 0.12)
       : purchaseOrders.reduce((sum, po) => sum + (po.total_amount || 0), 0);
   const activeSynergies = synergies.filter((s) => {
     const st = (s.status ?? '').toLowerCase();
     return st === 'approved' || st === 'rfp' || st === 'active' || st === 'detected';
   }).length;
+
+  const analyticsTotalVolume = sessionDemoLive ? getCartagenaDemoConsolidatedUsdTotal() : 0;
+  const analyticsTotalSavings = sessionDemoLive ? getCartagenaDemoEstimatedSavingsUsd() : 0;
+  const analyticsActiveSynergies = analyticsSynergies.filter((s) => {
+    const st = (s.status ?? '').toLowerCase();
+    return st === 'approved' || st === 'rfp' || st === 'active' || st === 'detected' || st === 'open' || st === 'pending';
+  }).length;
+  const analyticsTotalSynergiesCount = analyticsSynergies.length;
   const avgCloseTime = rfps.length > 0 
     ? rfps.reduce((sum, rfp) => {
         if (rfp.created_at && rfp.closing_at) {
@@ -521,75 +532,47 @@ export default function IntelligencePage() {
 
   const filteredData = getFilteredData();
   const latestScoring = scoringRuns[0]?.results_json || {};
-  const radarEfficiencyData = [
-    {
-      metric: 'Price',
-      value: Math.round((Number(latestScoring.price_efficiency ?? 0.9) || 0.9) * 100),
-      benchmark: 100,
-    },
-    {
-      metric: 'Delivery',
-      value: Math.round((Number(latestScoring.delivery_efficiency ?? 0.88) || 0.88) * 100),
-      benchmark: 100,
-    },
-  ];
+
+  const radarEfficiencyData = useMemo(() => {
+    if (!sessionDemoLive) {
+      return [
+        { metric: 'Price', value: 0, benchmark: 100 },
+        { metric: 'Delivery', value: 0, benchmark: 100 },
+      ];
+    }
+    return [
+      {
+        metric: 'Price',
+        value: Math.round((Number(latestScoring.price_efficiency ?? 0.9) || 0.9) * 100),
+        benchmark: 100,
+      },
+      {
+        metric: 'Delivery',
+        value: Math.round((Number(latestScoring.delivery_efficiency ?? 0.88) || 0.88) * 100),
+        benchmark: 100,
+      },
+    ];
+  }, [sessionDemoLive, latestScoring]);
 
   const savingsDonutData = useMemo(() => {
-    if (sessionDemoLive) return getCartagenaDemoDonutData();
-    return [
-      { name: 'Rodamientos', value: 15, color: '#9aff8d' },
-      { name: 'Lubricantes', value: 12, color: '#38bdf8' },
-      { name: 'EPP', value: 22, color: '#f59e0b' },
-    ];
+    if (!sessionDemoLive) return [];
+    return getCartagenaDemoDonutData();
   }, [sessionDemoLive]);
 
   const volumeBarsData = useMemo(() => {
-    if (sessionDemoLive) {
-      return getCartagenaDemoSynergyRows().slice(0, 6).map((r) => {
-        const amt = r.volume_total_json.amount;
-        const pct = r.volume_total_json.estimated_savings_pct;
-        const cat =
-          r.item_category.length > 34 ? `${r.item_category.slice(0, 32)}…` : r.item_category;
-        return {
-          category: cat,
-          individual: Math.max(0, Math.round(amt * (1 - pct / 100))),
-          cluster: amt,
-        };
-      });
-    }
-    return Array.from(
-      new Set(
-        synergies
-          .map((s) => s.item_category)
-          .filter((category): category is string => Boolean(category)),
-      ),
-    )
-      .slice(0, 6)
-      .map((category) => {
-        const clusterDemand = synergies
-          .filter((s) => s.item_category === category)
-          .reduce((sum, s) => sum + extractVolumeTotal(s.volume_total_json), 0);
-        const avgSavingPct =
-          synergies
-            .filter((s) => s.item_category === category)
-            .reduce(
-              (sum, s) =>
-                sum +
-                Number(
-                  (typeof s.volume_total_json === 'object' && s.volume_total_json?.estimated_savings_pct) ??
-                    12,
-                ),
-              0,
-            ) / Math.max(1, synergies.filter((s) => s.item_category === category).length);
-
-        const individualDemand = Math.round(clusterDemand * (1 - avgSavingPct / 100));
-        return {
-          category,
-          individual: Math.max(0, individualDemand),
-          cluster: clusterDemand,
-        };
-      });
-  }, [sessionDemoLive, synergies]);
+    if (!sessionDemoLive) return [];
+    return getCartagenaDemoSynergyRows().map((r) => {
+      const amt = r.volume_total_json.amount;
+      const pct = r.volume_total_json.estimated_savings_pct;
+      const cat =
+        r.item_category.length > 34 ? `${r.item_category.slice(0, 32)}…` : r.item_category;
+      return {
+        category: cat,
+        individual: Math.max(0, Math.round(amt * (1 - pct / 100))),
+        cluster: amt,
+      };
+    });
+  }, [sessionDemoLive]);
 
   const renderDonutLabel = useCallback(
     (props: {
@@ -632,22 +615,39 @@ export default function IntelligencePage() {
   );
 
   const timelineOrder = ['RFP_OPENED', 'OFFER_RECEIVED', 'PO_SIMULATED'];
-  const timelineEvents = timelineOrder.map((eventType, index) => {
-    const event = auditEvents.find((e) => (e.event_type || '').toUpperCase() === eventType);
-    return {
-      step: index + 1,
-      eventType,
-      label:
-        eventType === 'RFP_OPENED'
-          ? 'RFP opened'
-          : eventType === 'OFFER_RECEIVED'
-          ? 'Offer received'
-          : 'PO simulated',
-      summary: event?.summary || 'Evento pendiente',
-      createdAt: event?.created_at || null,
-      completed: Boolean(event),
-    };
-  });
+  const timelineEvents = useMemo(() => {
+    if (!sessionDemoLive) {
+      return timelineOrder.map((eventType, index) => ({
+        step: index + 1,
+        eventType,
+        label:
+          eventType === 'RFP_OPENED'
+            ? 'RFP opened'
+            : eventType === 'OFFER_RECEIVED'
+              ? 'Offer received'
+              : 'PO simulated',
+        summary: 'Esperando carga de datos…',
+        createdAt: null as string | null,
+        completed: false,
+      }));
+    }
+    return timelineOrder.map((eventType, index) => {
+      const event = auditEvents.find((e) => (e.event_type || '').toUpperCase() === eventType);
+      return {
+        step: index + 1,
+        eventType,
+        label:
+          eventType === 'RFP_OPENED'
+            ? 'RFP opened'
+            : eventType === 'OFFER_RECEIVED'
+              ? 'Offer received'
+              : 'PO simulated',
+        summary: event?.summary || 'Evento pendiente',
+        createdAt: event?.created_at || null,
+        completed: Boolean(event),
+      };
+    });
+  }, [sessionDemoLive, auditEvents]);
 
   const nodeMap = new Map<string, SceneNode>();
   const sceneLinks: SceneLink[] = [];
@@ -953,7 +953,10 @@ export default function IntelligencePage() {
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
                     <p className="text-4xl font-bold text-[#9aff8d] mb-2">
-                      ${totalSavings > 1_000_000 ? `${(totalSavings / 1_000_000).toFixed(1)}M` : totalSavings.toLocaleString('es-CO')}
+                      $
+                      {analyticsTotalSavings > 1_000_000
+                        ? `${(analyticsTotalSavings / 1_000_000).toFixed(1)}M`
+                        : analyticsTotalSavings.toLocaleString('es-CO')}
                     </p>
                     <p className="text-base text-zinc-400 font-medium">Ahorro Potencial</p>
                   </div>
@@ -961,20 +964,22 @@ export default function IntelligencePage() {
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
                     <p className="text-4xl font-bold text-white mb-2">
-                      {totalVolume > 1_000_000 ? `${(totalVolume / 1_000_000).toFixed(1)}M` : totalVolume.toLocaleString('es-CO')}
+                      {analyticsTotalVolume > 1_000_000
+                        ? `${(analyticsTotalVolume / 1_000_000).toFixed(1)}M`
+                        : analyticsTotalVolume.toLocaleString('es-CO')}
                     </p>
                     <p className="text-base text-zinc-400 font-medium">Volumen Consolidado</p>
                   </div>
                 </SectionCard>
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
-                    <p className="text-4xl font-bold text-white mb-2">{activeSynergies}</p>
+                    <p className="text-4xl font-bold text-white mb-2">{analyticsActiveSynergies}</p>
                     <p className="text-base text-zinc-400 font-medium">Sinergias activas</p>
                   </div>
                 </SectionCard>
                 <SectionCard title="" description="">
                   <div className="text-center py-2">
-                    <p className="text-4xl font-bold text-white mb-2">{synergies.length}</p>
+                    <p className="text-4xl font-bold text-white mb-2">{analyticsTotalSynergiesCount}</p>
                     <p className="text-base text-zinc-400 font-medium">Total sinergias</p>
                   </div>
                 </SectionCard>
@@ -1013,35 +1018,41 @@ export default function IntelligencePage() {
 
                 <SectionCard title="Donut de Ahorro por Categoría" description="Distribución estimada de ahorros">
                   <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-                        <Pie
-                          data={savingsDonutData}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={52}
-                          outerRadius={118}
-                          paddingAngle={5}
-                          labelLine={false}
-                          label={renderDonutLabel}
-                        >
-                          {savingsDonutData.map((entry) => (
-                            <Cell key={entry.name} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(value: number | string | undefined) => `${value ?? 0}%`}
-                          contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
-                          labelStyle={{ color: '#d4d4d8', fontSize: 14 }}
-                        />
-                        <Legend
-                          wrapperStyle={{ fontSize: 14, color: '#fafafa' }}
-                          iconType="circle"
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    {savingsDonutData.length === 0 ? (
+                      <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                        Esperando carga de datos…
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                          <Pie
+                            data={savingsDonutData}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={52}
+                            outerRadius={118}
+                            paddingAngle={5}
+                            labelLine={false}
+                            label={renderDonutLabel}
+                          >
+                            {savingsDonutData.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            formatter={(value: number | string | undefined) => `${value ?? 0}%`}
+                            contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
+                            labelStyle={{ color: '#d4d4d8', fontSize: 14 }}
+                          />
+                          <Legend
+                            wrapperStyle={{ fontSize: 14, color: '#fafafa' }}
+                            iconType="circle"
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    )}
                   </div>
                 </SectionCard>
               </div>
@@ -1049,26 +1060,33 @@ export default function IntelligencePage() {
               <div className="grid grid-cols-1 gap-6">
                 <SectionCard title="Barras de Volumen Consolidado" description="Demanda individual vs demanda consolidada del cluster">
                   <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={volumeBarsData} margin={{ top: 10, right: 20, left: 10, bottom: 30 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
-                        <XAxis
-                          dataKey="category"
-                          tick={{ fill: '#a1a1aa', fontSize: 11 }}
-                          angle={-15}
-                          textAnchor="end"
-                          interval={0}
-                        />
-                        <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} />
-                        <Tooltip
-                          contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
-                          labelStyle={{ color: '#d4d4d8' }}
-                        />
-                        <Legend />
-                        <Bar dataKey="individual" name="Demanda individual" fill="#64748b" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="cluster" name="Demanda cluster" fill="#9aff8d" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                    {volumeBarsData.length === 0 ? (
+                      <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                        Esperando carga de datos…
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={volumeBarsData} margin={{ top: 10, right: 20, left: 10, bottom: 30 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
+                          <XAxis
+                            dataKey="category"
+                            tick={{ fill: '#a1a1aa', fontSize: 10 }}
+                            angle={-35}
+                            textAnchor="end"
+                            height={100}
+                            interval={0}
+                          />
+                          <YAxis tick={{ fill: '#a1a1aa', fontSize: 12 }} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46' }}
+                            labelStyle={{ color: '#d4d4d8' }}
+                          />
+                          <Legend />
+                          <Bar dataKey="individual" name="Demanda individual" fill="#64748b" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="cluster" name="Demanda cluster" fill="#9aff8d" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </div>
                 </SectionCard>
 
@@ -1106,7 +1124,9 @@ export default function IntelligencePage() {
                     ))}
                     <div className="pt-2 border-t border-zinc-800">
                       <p className="text-xs text-zinc-500">
-                        Eventos cargados: {auditEvents.length} | Scoring runs: {scoringRuns.length}
+                        {sessionDemoLive
+                          ? `Eventos cargados: ${auditEvents.length} | Scoring runs: ${scoringRuns.length}`
+                          : 'Esperando carga de datos…'}
                       </p>
                     </div>
                   </div> 
@@ -1117,45 +1137,47 @@ export default function IntelligencePage() {
 
           {/* Modo 4: Línea de Tiempo */}
           {activeMode === 'timeline' && (
-            <SectionCard title="Línea de Tiempo" description="Cronología de eventos y decisiones">
-              <div className="relative">
-                <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-zinc-800"></div>
-                <div className="space-y-6 pl-12">
-                  {[...synergies, ...rfps].slice(0, 10).sort((a, b) => {
-                    const dateA = new Date(a.created_at || 0).getTime();
-                    const dateB = new Date(b.created_at || 0).getTime();
-                    return dateB - dateA;
-                  }).map((item, i) => {
-                    const date = item.created_at ? new Date(item.created_at) : new Date();
-                    const isSynergy = 'synergy_id' in item;
-                    
-                    return (
-                      <div key={i} className="relative">
-                        <div className="absolute -left-12 top-1 w-4 h-4 rounded-full bg-[#9aff8d] border-2 border-zinc-900"></div>
-                        <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-5">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <h4 className="text-white font-bold text-lg mb-2">
-                                {isSynergy ? (item as Synergy).item_category : 'RFP'}
-                              </h4>
-                              <p className="text-zinc-400 text-base">
-                                {date.toLocaleDateString('es-CO', { 
-                                  year: 'numeric', 
-                                  month: 'long', 
-                                  day: 'numeric' 
-                                })}
-                              </p>
-                            </div>
-                            <div className="ml-4">
-                              <StatusBadge status={item.status || 'pending'} />
+            <SectionCard title="Línea de Tiempo" description="Cronología de sinergias (demo Cartagena)">
+              {!sessionDemoLive ? (
+                <div className="py-16 text-center text-sm text-zinc-500">Esperando carga de datos…</div>
+              ) : (
+                <div className="relative">
+                  <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-zinc-800"></div>
+                  <div className="space-y-6 pl-12">
+                    {[...(getCartagenaDemoSynergyRows() as unknown as Synergy[])]
+                      .sort((a, b) => {
+                        const dateA = new Date(a.created_at || 0).getTime();
+                        const dateB = new Date(b.created_at || 0).getTime();
+                        return dateB - dateA;
+                      })
+                      .map((item) => {
+                        const date = item.created_at ? new Date(item.created_at) : new Date();
+                        return (
+                          <div key={item.synergy_id} className="relative">
+                            <div className="absolute -left-12 top-1 w-4 h-4 rounded-full bg-[#9aff8d] border-2 border-zinc-900"></div>
+                            <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-5">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <h4 className="text-white font-bold text-lg mb-2">{item.item_category}</h4>
+                                  <p className="text-zinc-400 text-base">
+                                    {date.toLocaleDateString('es-CO', {
+                                      year: 'numeric',
+                                      month: 'long',
+                                      day: 'numeric',
+                                    })}
+                                  </p>
+                                </div>
+                                <div className="ml-4">
+                                  <StatusBadge status={item.status || 'pending'} />
+                                </div>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        );
+                      })}
+                  </div>
                 </div>
-              </div>
+              )}
             </SectionCard>
           )}
 
