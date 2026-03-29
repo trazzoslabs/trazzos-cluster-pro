@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import {
+  AUTH_BYPASS_USER_EMAIL,
+  AUTH_BYPASS_USER_ID,
+  AUTH_BYPASS_COMPANY_ID,
+} from '@/lib/authBypass';
 import { supabaseClient } from '@/lib/supabaseClient';
 import PageTitle from '../components/ui/PageTitle';
 import SectionCard from '../components/ui/SectionCard';
@@ -15,36 +20,6 @@ import {
   unwrapCsvHeaderLineIfWholeLineQuoted,
 } from '@/lib/ingestionFileExtract';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
-
-/** Cookie no httpOnly establecida en set-session / Google callback. */
-function readDocumentCookie(name: string): string {
-  if (typeof document === 'undefined') return '';
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const m = document.cookie.match(new RegExp(`(?:^|; )${escaped}=([^;]*)`));
-  return m ? decodeURIComponent(m[1].trim()) : '';
-}
-
-async function resolveIngestionUserEmail(): Promise<string> {
-  const {
-    data: { user },
-  } = await supabaseClient.auth.getUser();
-  let email = (user?.email ?? '').trim();
-  if (!email) {
-    email = readDocumentCookie('trazzos_user_email').trim();
-  }
-  if (!email) {
-    try {
-      const res = await fetch('/api/auth/profile', { credentials: 'include' });
-      if (res.ok) {
-        const body = await res.json().catch(() => ({}));
-        email = String(body?.data?.email ?? '').trim();
-      }
-    } catch {
-      /* noop */
-    }
-  }
-  return email;
-}
 
 interface SessionResponse {
   [key: string]: any;
@@ -66,17 +41,12 @@ type DatasetType = 'shutdowns' | 'needs' | 'suppliers';
 type UploadPhase = 'idle' | 'validating' | 'uploading' | 'processing';
 
 export default function IngestionPage() {
-  // IDs fijos según requerimiento
-  const FIXED_COMPANY_ID = 'aaaa1111-1111-4111-a111-111111111111'; // Reficar
-  const FIXED_USER_ID = 'bff82884-0263-4bc1-8895-3567c2c02b55';
+  /** Identidad fija (companies.company_id / profiles.user_id); sin Supabase Auth en esta pantalla. */
+  const HARDCODED_COMPANY_ID = AUTH_BYPASS_COMPANY_ID;
+  const HARDCODED_USER_ID = AUTH_BYPASS_USER_ID;
+  const HARDCODED_USER_EMAIL = AUTH_BYPASS_USER_EMAIL;
   const FIXED_CLUSTER_ID = 'c1057e40-5e34-4e3a-b856-42f2b4b8a248';
 
-  // Form inputs
-  const [companyId, setCompanyId] = useState<string>(FIXED_COMPANY_ID);
-  const [userId, setUserId] = useState<string>(FIXED_USER_ID);
-  const [userEmail, setUserEmail] = useState<string>('');
-  /** true solo si el email lo rellenamos desde getUser / cookie / perfil (campo bloqueado). */
-  const [emailIdentityLocked, setEmailIdentityLocked] = useState(false);
   const [appUrl, setAppUrl] = useState<string>('http://localhost:3000');
   const [file, setFile] = useState<File | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -103,9 +73,6 @@ export default function IngestionPage() {
   // Error global para mostrar en alerta roja
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [mappingAppliedBanner, setMappingAppliedBanner] = useState(false);
-
-  // User profile loading state
-  const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
 
   // Step 1 - Session
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null);
@@ -410,37 +377,6 @@ export default function IngestionPage() {
     if (!id || id.toLowerCase() === 'undefined' || id.toLowerCase() === 'null') return null;
     return id;
   }, [jobId]);
-
-  // Identidad (email): Supabase getUser → cookie trazzos_user_email → /api/auth/profile
-  useEffect(() => {
-    let cancelled = false;
-    const hydrateEmail = async () => {
-      setLoadingProfile(true);
-      try {
-        const email = await resolveIngestionUserEmail();
-        if (!cancelled && email) {
-          setUserEmail(email);
-          setEmailIdentityLocked(true);
-        }
-      } catch (e) {
-        console.warn('[ingestion] No se pudo resolver email:', e);
-      } finally {
-        if (!cancelled) setLoadingProfile(false);
-      }
-    };
-    void hydrateEmail();
-    const {
-      data: { subscription },
-    } = supabaseClient.auth.onAuthStateChange((event) => {
-      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-        void hydrateEmail();
-      }
-    });
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
-    };
-  }, []);
 
   // Restore persisted tracking IDs (solo job_id para estado; correlation_id no se usa para búsqueda)
   useEffect(() => {
@@ -759,8 +695,8 @@ export default function IngestionPage() {
     }
 
     // Usar IDs fijos siempre
-    const finalCompanyId = FIXED_COMPANY_ID;
-    const finalUserId = FIXED_USER_ID;
+    const finalCompanyId = HARDCODED_COMPANY_ID;
+    const finalUserId = HARDCODED_USER_ID;
 
     console.log('[handleCreateSession] IDs a usar:', {
       company_id: finalCompanyId,
@@ -998,13 +934,7 @@ export default function IngestionPage() {
     setErrorConfirm(null);
 
     // Validación pre-vuelo: user_email requerido para Workflow 3 (objeto de perfil, no null)
-    const effectiveEmail = (userEmail ?? '').trim();
-    if (!effectiveEmail) {
-      const aviso = 'Debe iniciar sesión nuevamente para obtener su identidad antes de confirmar la carga.';
-      setErrorConfirm(aviso);
-      setGlobalError('No se pudo obtener su email. ' + aviso);
-      return;
-    }
+    const effectiveEmail = HARDCODED_USER_EMAIL.trim();
 
     let effectiveSession: SessionResponse | null = null;
 
@@ -1236,8 +1166,8 @@ export default function IngestionPage() {
       // Fase 1 (Session): pedir signed_url + IDs al proxy (JSON/JSONL ya convertidos a CSV en cliente)
       const formData = new FormData();
       formData.append('file', sessionFile, sessionFileName);
-      formData.append('company_id', FIXED_COMPANY_ID);
-      formData.append('user_id', FIXED_USER_ID);
+      formData.append('company_id', HARDCODED_COMPANY_ID);
+      formData.append('user_id', HARDCODED_USER_ID);
       formData.append('file_name', sessionFileName);
       formData.append('file_type', sessionFileType);
       formData.append('dataset_type', normalizeDatasetType(sessionDatasetType));
@@ -1299,12 +1229,7 @@ export default function IngestionPage() {
       }
 
       // Fase 3 (Confirm - V2-02 / Workflow 3): metadatos de usuario requeridos por n8n
-      const confirmEmail = (userEmail ?? '').trim();
-      if (!confirmEmail) {
-        setGlobalError('No se pudo obtener su email. Debe iniciar sesión nuevamente para obtener su identidad antes de confirmar la carga.');
-        setUploadPhase('idle');
-        return;
-      }
+      const confirmEmail = HARDCODED_USER_EMAIL.trim();
       setUploadPhase('processing');
       const explicitJobId = jobIdRef.current ?? receivedJobId ?? jobId ?? '';
       const confirmJobId = normalizeTrackingId(explicitJobId);
@@ -1461,13 +1386,14 @@ export default function IngestionPage() {
             </label>
             <input
               type="text"
-              value={companyId}
+              value={HARDCODED_COMPANY_ID}
               disabled
               readOnly
+              autoComplete="off"
               placeholder="Reficar (fijo)"
               className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
-            <p className="mt-1 text-xs text-zinc-500">Valor fijo: Reficar</p>
+            <p className="mt-1 text-xs text-zinc-500">Identidad fija (companies.company_id); no editable.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -1475,13 +1401,14 @@ export default function IngestionPage() {
             </label>
             <input
               type="text"
-              value={userId}
+              value={HARDCODED_USER_ID}
               disabled
               readOnly
+              autoComplete="off"
               placeholder="Usuario fijo"
               className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-400 cursor-not-allowed"
             />
-            <p className="mt-1 text-xs text-zinc-500">Valor fijo asignado</p>
+            <p className="mt-1 text-xs text-zinc-500">Identidad fija (profiles.user_id); no editable.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
@@ -1489,33 +1416,13 @@ export default function IngestionPage() {
             </label>
             <input
               type="email"
-              value={userEmail}
-              onChange={(e) => setUserEmail(e.target.value)}
-              disabled={loadingProfile || emailIdentityLocked}
-              readOnly={loadingProfile || emailIdentityLocked}
-              placeholder={
-                loadingProfile
-                  ? 'Cargando identidad...'
-                  : emailIdentityLocked
-                    ? ''
-                    : 'Introduce el email con el que iniciaste sesión'
-              }
-              className={`w-full px-4 py-2 border border-zinc-700 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#9aff8d] ${
-                loadingProfile || emailIdentityLocked
-                  ? 'bg-zinc-900 text-zinc-300 cursor-not-allowed'
-                  : 'bg-zinc-800 text-white'
-              }`}
+              value={HARDCODED_USER_EMAIL}
+              disabled
+              readOnly
+              autoComplete="off"
+              className="w-full px-4 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-300 cursor-not-allowed text-sm"
             />
-            {emailIdentityLocked && userEmail.trim() && !loadingProfile && (
-              <p className="mt-1 text-xs text-zinc-500">
-                Bloqueado con el email detectado (sesión Supabase o cookie de acceso).
-              </p>
-            )}
-            {!loadingProfile && !emailIdentityLocked && !userEmail.trim() && (
-              <p className="mt-1 text-xs text-amber-600/90">
-                No se detectó email en la sesión. Usa el mismo email con el que iniciaste sesión.
-              </p>
-            )}
+            <p className="mt-1 text-xs text-zinc-500">Identidad fija para n8n / confirmación; no usa Supabase Auth en esta página.</p>
           </div>
         </div>
 

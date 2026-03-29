@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import {
+  AUTH_BYPASS_USER_ID,
+  getAuthBypassProfileRow,
+  isHardcodedIdentityBypass,
+} from '@/lib/authBypass';
 import { supabaseServer } from './supabaseServer';
 
 /**
@@ -51,6 +56,10 @@ export async function fetchPublicProfileByUserIdWithResult(
   const trimmed = userId?.trim();
   if (!trimmed) {
     return { ok: true, profile: null };
+  }
+
+  if (trimmed === AUTH_BYPASS_USER_ID && isHardcodedIdentityBypass()) {
+    return { ok: true, profile: getAuthBypassProfileRow() };
   }
 
   const { data, error } = await supabaseServer

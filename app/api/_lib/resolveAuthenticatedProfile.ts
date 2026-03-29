@@ -1,4 +1,10 @@
 import { NextRequest } from 'next/server';
+import {
+  AUTH_BYPASS_USER_EMAIL,
+  AUTH_BYPASS_USER_ID,
+  getAuthBypassProfileRow,
+  isHardcodedIdentityBypass,
+} from '@/lib/authBypass';
 import { supabaseServer } from './supabaseServer';
 
 export type AuthenticatedProfileRow = {
@@ -25,6 +31,18 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * Misma lógica que GET /api/auth/profile: cookies Trazzos + Supabase Auth (`auth.users`) + `public.profiles` (PK `user_id`).
  * Sirve para BFFs que deben usar el email real del usuario (p. ej. V2-03 upload-confirm → n8n).
  */
+function bypassProfileSuccess(): ResolveAuthenticatedProfileResult {
+  const profile = getAuthBypassProfileRow();
+  return {
+    ok: true,
+    user_id: profile.user_id,
+    email: AUTH_BYPASS_USER_EMAIL,
+    authMethod: 'bypass',
+    identifier: AUTH_BYPASS_USER_EMAIL,
+    profile,
+  };
+}
+
 export async function resolveAuthenticatedProfile(
   request: NextRequest,
 ): Promise<ResolveAuthenticatedProfileResult> {
@@ -32,12 +50,15 @@ export async function resolveAuthenticatedProfile(
   const walletCookie = request.cookies.get('trazzos_wallet');
   const userCookie = request.cookies.get('trazzos_user');
   const authMethodCookie = request.cookies.get('trazzos_auth_method');
+  const bypass = isHardcodedIdentityBypass();
 
   if (!authCookie || authCookie.value !== 'ok') {
+    if (bypass) return bypassProfileSuccess();
     return { ok: false, status: 401, message: 'No autenticado' };
   }
 
   if (!walletCookie?.value && !userCookie?.value) {
+    if (bypass) return bypassProfileSuccess();
     return { ok: false, status: 401, message: 'No se encontró información de usuario' };
   }
 
@@ -92,12 +113,17 @@ export async function resolveAuthenticatedProfile(
   }
 
   if (!user_id) {
+    if (bypass) return bypassProfileSuccess();
     return {
       ok: false,
       status: 404,
       message:
         'Usuario no encontrado en el sistema. Asegúrate de que el usuario tenga un perfil creado en la tabla profiles.',
     };
+  }
+
+  if (bypass && user_id === AUTH_BYPASS_USER_ID) {
+    return bypassProfileSuccess();
   }
 
   const { data: profile, error: profileError } = await supabaseServer

@@ -9,6 +9,7 @@ import {
   trazzosMappingSourceColumnsStorageKey,
 } from '@/lib/ingestionFileExtract';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
+import { AUTH_BYPASS_COMPANY_ID, AUTH_BYPASS_USER_ID } from '@/lib/authBypass';
 import SectionCard from '../../components/ui/SectionCard';
 
 export interface IngestionJobMappingSnapshot {
@@ -603,6 +604,8 @@ export default function IngestionMappingWorkflow({
         job_id: jobId,
         mapping_profile_id,
         dataset_type,
+        company_id: AUTH_BYPASS_COMPANY_ID,
+        user_id: AUTH_BYPASS_USER_ID,
         mapping,
         mapping_json: mapping,
       };
@@ -610,6 +613,8 @@ export default function IngestionMappingWorkflow({
         job_id: jobId,
         mapping_profile_id,
         dataset_type,
+        company_id: AUTH_BYPASS_COMPANY_ID,
+        user_id: AUTH_BYPASS_USER_ID,
         mapping: Object.entries(mapping).map(([source_column, target_field]) => ({
           source_column,
           target_field,

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { fetchWithTimeout, createErrorResponse, createSuccessResponse } from '../../_lib/http';
 import { supabaseServer } from '../../_lib/supabaseServer';
 import { normalizeDatasetType } from '@/lib/utils/normalization';
+import { AUTH_BYPASS_COMPANY_ID, AUTH_BYPASS_USER_ID } from '@/lib/authBypass';
 
 const N8N_WEBHOOK_BASE = process.env.N8N_WEBHOOK_BASE;
 const N8N_MAPPING_APPLY_URL = process.env.N8N_MAPPING_APPLY_URL;
@@ -182,11 +183,21 @@ export async function POST(request: NextRequest) {
       return createErrorResponse('Perfil guardado pero no se pudo actualizar el job', 500);
     }
 
-    /** Contrato n8n: lista de pares; `dataset_type` sincronizado con ingestion_jobs antes de este POST. */
+    const bodyCompanyRaw =
+      typeof body.company_id === 'string' ? body.company_id.trim() : '';
+    const bodyUserRaw = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+    const companyIdForN8n = isValidUuid(bodyCompanyRaw)
+      ? bodyCompanyRaw
+      : String(upload.company_id ?? AUTH_BYPASS_COMPANY_ID);
+    const userIdForN8n = isValidUuid(bodyUserRaw) ? bodyUserRaw : AUTH_BYPASS_USER_ID;
+
+    /** Contrato n8n: lista de pares + tenant/usuario (alineado con ingestion / profiles). */
     const n8nPayload = {
       job_id,
       mapping_profile_id,
       dataset_type: resolvedDatasetType,
+      company_id: companyIdForN8n,
+      user_id: userIdForN8n,
       mapping: pairs,
     };
 
